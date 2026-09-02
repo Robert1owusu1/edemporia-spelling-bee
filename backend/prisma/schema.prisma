@@ -1,0 +1,206 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum AccountRole {
+  PARENT
+  TEACHER
+  ADMIN
+  STUDENT
+}
+
+// The thing that actually logs in -- a parent or teacher (or the school
+// administrator). Matches the Login screen's email/password flow, which returns
+// a *list* of student profiles on success, not a single learner identity.
+model Account {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  name         String?
+  avatarUrl    String?
+  emailVerifiedAt DateTime?
+  verificationTokenHash String?
+  verificationExpiresAt DateTime?
+  passwordResetTokenHash String?
+  passwordResetExpiresAt DateTime?
+  passwordHash String
+  role         AccountRole @default(PARENT)
+  approvedAt   DateTime?
+  // Bumped on password change or "log out everywhere" to invalidate all
+  // previously issued JWTs. Verified against the DB on every request.
+  tokenVersion Int         @default(0)
+  createdAt    DateTime    @default(now())
+
+  students     Student[]
+  classrooms   Classroom[] @relation("ClassroomTeacher")
+  auditLogs    AuditLog[]
+  preferences  AccountPreference?
+}
+
+// A child profile under an Account -- this is what actually plays the
+// game and holds gamification state (points/streak/hearts/tier).
+// One Account can have several Students (siblings, or a teacher's class).
+model Student {
+  id              String   @id @default(uuid())
+  accountId       String
+  name            String
+  studentCode     String   @unique
+  age             Int
+  className       String
+  currentTier     Int      @default(1)
+  hearts          Int      @default(5)
+  heartsUpdatedAt DateTime @default(now())
+  streak          Int      @default(0)
+  points          Int      @default(0)
+  avatarColor     String?
+  avatarUrl       String?
+  lastActiveAt    DateTime @default(now())
+  classroomId     String?
+  createdAt       DateTime @default(now())
+
+  account  Account        @relation(fields: [accountId], references: [id])
+  classroom Classroom?    @relation(fields: [classroomId], references: [id])
+  progress Progress[]
+  badges   StudentBadge[]
+  preferences StudentPreference?
+  dailyChallenges DailyChallengeCompletion[]
+  sessions PracticeSession[]
+
+  @@index([accountId])
+  @@index([className])
+  @@index([studentCode])
+  @@index([classroomId])
+}
+
+model Word {
+  id              String   @id @default(uuid())
+  text            String
+  tier            Int // difficulty tier -- the only progression axis for now
+  category        String? // optional topic tag (e.g. "Animals", "Science")
+  definition      String
+  exampleSentence String
+  createdAt       DateTime @default(now())
+
+  progress Progress[]
+
+  @@index([tier])
+  @@index([text])
+}
+
+model Progress {
+  id        String   @id @default(uuid())
+  studentId String
+  wordId    String
+  correct   Boolean
+  attempts  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id])
+  word    Word    @relation(fields: [wordId], references: [id])
+
+  @@index([studentId])
+  @@index([wordId])
+}
+
+model Badge {
+  id          String @id @default(uuid())
+  name        String
+  description String
+  criteria    String // simple machine-readable rule, e.g. "streak:7"
+
+  students StudentBadge[]
+}
+
+model StudentBadge {
+  id        String   @id @default(uuid())
+  studentId String
+  badgeId   String
+  earnedAt  DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id])
+  badge   Badge   @relation(fields: [badgeId], references: [id])
+
+  @@unique([studentId, badgeId])
+}
+
+model Classroom {
+  id        String   @id @default(uuid())
+  name      String
+  grade     String?
+  teacherId String
+  createdAt DateTime @default(now())
+
+  teacher Account @relation("ClassroomTeacher", fields: [teacherId], references: [id])
+  students Student[]
+
+  @@index([teacherId])
+}
+
+model StudentPreference {
+  id               String   @id @default(uuid())
+  studentId        String   @unique
+  darkMode         Boolean  @default(false)
+  textSize         String   @default("normal")
+  updatedAt        DateTime @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// Account-level preferences that sync across a parent/teacher's devices.
+model AccountPreference {
+  id          String   @id @default(uuid())
+  accountId   String   @unique
+  darkMode    Boolean  @default(false)
+  dyslexiaFont Boolean @default(false)
+  textSize    String   @default("normal")
+  updatedAt   DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model DailyChallengeCompletion {
+  id        String   @id @default(uuid())
+  studentId String
+  date      DateTime
+  wordId    String
+  correct   Boolean
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, date])
+  @@index([wordId])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  accountId String
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, createdAt])
+  @@index([action, createdAt])
+}
+
+// Lightweight activity ledger: how long a learner spent on a round, used to
+// power "hours spent" stats for parents, teachers and the admin dashboard.
+model PracticeSession {
+  id              String   @id @default(uuid())
+  studentId       String
+  source          String   @default("PRACTICE") // PRACTICE | TIER | ACTIVITY
+  durationSeconds Int      @default(0)
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  createdAt       DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, startedAt])
+}
