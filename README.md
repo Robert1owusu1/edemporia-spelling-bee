@@ -75,7 +75,7 @@ The demo account is never seeded in production (`NODE_ENV=production`).
 
 ## Account flows
 
-- Parents and teachers register with email/password (min 8 characters), then create student profiles. School self-registration is closed — admins create accounts from the admin console.
+- Self-registration is closed: an administrator creates parent and teacher accounts from the admin console (each with a min-8-character password) and approves them before they can sign in. Logged-in parents and teachers then create learner profiles.
 - Every student receives a unique `ST-xxxxx` login code; student-code sign-in has access only to that student profile.
 - In production, email must be verified before an account can log in.
 - Teachers and admins manage the shared word bank at `/admin`.
@@ -112,6 +112,11 @@ npm run lint
 npm run build
 node --check backend/server.js
 npx --prefix backend prisma validate
+npm run test:e2e      # 40 end-to-end API scenarios against a running backend
 ```
+
+The endpoint test runs the full account, learner, gameplay, classroom, word-bank
+and access-control flows against a live database and removes the data it creates
+afterwards, so it is safe to re-run against a development database.
 
 Never commit `.env` files. Rotate database credentials immediately if they have ever been copied into source control or shared outside your deployment environment.

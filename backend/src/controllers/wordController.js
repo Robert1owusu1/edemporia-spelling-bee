@@ -20,7 +20,7 @@ async function getWordsByTier(req, res) {
     definition: true,
     exampleSentence: true,
   };
-  const words = await prisma.word.findMany({ where: { tier }, select });
+  let words = await prisma.word.findMany({ where: { tier }, select });
 
   const studentId = req.query.studentId;
   if (studentId) {

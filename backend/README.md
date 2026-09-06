@@ -108,4 +108,13 @@ router wrapper in `src/routes/index.js`.
 node --check server.js
 node --check src/controllers/*.js
 npx prisma validate
+npm run test:e2e        # 40 end-to-end API scenarios (self-cleaning)
 ```
+
+`npm run test:e2e` (see `scripts/e2eTest.js`) exercises 40 end-to-end scenarios
+against a running backend and a live, seeded database -- authentication,
+students, placement, word lists, the daily challenge, server-graded rounds,
+hints, badges, preferences, the leaderboard, classrooms, the admin word bank
+and admin account management, plus the role/ownership access-control boundaries.
+It removes the accounts, learners, classrooms and words it creates, so it is
+safe to re-run.
