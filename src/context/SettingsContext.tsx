@@ -34,7 +34,9 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [apiBaseUrl, setApiBaseUrlState] = useState<string>(getStoredApiBaseUrl());
   const [speechVoice, setSpeechVoiceState] = useState(() => localStorage.getItem('spelling_bee_speech_voice') || '');
-  const [dyslexiaFont, setDyslexiaFontState] = useState(() => localStorage.getItem('spelling_bee_dyslexia_font') === 'true');
+  const [dyslexiaFont, setDyslexiaFontState] = useState(
+    () => localStorage.getItem('spelling_bee_dyslexia_font') === 'true',
+  );
 
   useEffect(() => {
     if (darkMode) {
@@ -43,16 +45,30 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       document.documentElement.classList.remove('dark');
     }
   }, [darkMode]);
-  useEffect(() => { document.documentElement.classList.toggle('dyslexia-mode', dyslexiaFont); }, [dyslexiaFont]);
+  useEffect(() => {
+    document.documentElement.classList.toggle('dyslexia-mode', dyslexiaFont);
+  }, [dyslexiaFont]);
+
+  // Apply the saved reading size to the document. index.css scales the root
+  // font for each data-text-size value; index.html applies the stored value
+  // before first paint so the page never flashes the default size.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-text-size', textSize);
+  }, [textSize]);
 
   // Load saved preferences. Account-level preferences win; if the account has
   // none saved yet, fall back to the active learner's preferences so existing
   // per-student setups keep working.
   useEffect(() => {
     if (!isAuthenticated) return;
-    void apiClient.getAccountPreferences()
+    void apiClient
+      .getAccountPreferences()
       .then((preferences) => {
-        const hasSaved = preferences && (preferences.darkMode !== undefined || preferences.textSize !== undefined || preferences.dyslexiaFont !== undefined);
+        const hasSaved =
+          preferences &&
+          (preferences.darkMode !== undefined ||
+            preferences.textSize !== undefined ||
+            preferences.dyslexiaFont !== undefined);
         if (hasSaved) {
           setDarkModeState(preferences.darkMode ?? darkMode);
           setTextSizeState(preferences.textSize ?? textSize);
@@ -60,7 +76,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           return;
         }
         if (activeStudent) {
-          void apiClient.getStudentPreferences(activeStudent.id)
+          void apiClient
+            .getStudentPreferences(activeStudent.id)
             .then((studentPrefs) => {
               setDarkModeState(studentPrefs.darkMode);
               setTextSizeState(studentPrefs.textSize);

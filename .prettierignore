@@ -1,0 +1,13 @@
+# Dependencies and build output
+node_modules
+dist
+build
+coverage
+
+# Generated database artefacts
+backend/prisma/migrations
+package-lock.json
+
+# Binary / non-source files
+*.docx
+*.png

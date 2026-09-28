@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 
 const COLORS = ['#F59E0B', '#FBBF24', '#6366F1', '#10B981', '#F43F5E', '#38BDF8', '#A78BFA'];
 

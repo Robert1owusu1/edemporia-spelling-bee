@@ -17,7 +17,7 @@ const WORD_LIST_PATH = path.join(
   "most-common-words-by-language",
   "build",
   "resources",
-  "english.txt"
+  "english.txt",
 );
 
 // Rank range = how common the word is (lower rank = more common =
@@ -68,7 +68,7 @@ async function lookupInDictionary(word) {
 function buildFallbackContent(word) {
   const cleaned = word.toLowerCase().trim();
   const definition = `A word used in spelling practice for ${cleaned}.`;
-  const exampleSentence = `We practiced the word \"${cleaned}\" in class today.`;
+  const exampleSentence = `We practiced the word "${cleaned}" in class today.`;
   return { definition, exampleSentence };
 }
 
@@ -124,7 +124,7 @@ async function main() {
 
   console.log(
     "\nDone. Spot-check the results with `npx prisma studio` before using them live -- " +
-    "an automated word list can occasionally pull something not appropriate for the app."
+      "an automated word list can occasionally pull something not appropriate for the app.",
   );
 }
 

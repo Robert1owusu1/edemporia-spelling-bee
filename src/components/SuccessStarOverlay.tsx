@@ -1,5 +1,6 @@
-import React from 'react';
 import BeeMascot from './BeeMascot';
+import { starsFor } from '../utils/format';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { Sparkles, Star, Trophy, CheckCircle2, Zap } from 'lucide-react';
 
 interface SuccessStarOverlayProps {
@@ -9,24 +10,25 @@ interface SuccessStarOverlayProps {
   onClose?: () => void;
 }
 
-function starCount(score: number, totalWords: number): number {
-  const accuracy = totalWords > 0 ? score / totalWords : 0;
-  if (accuracy >= 0.9) return 3;
-  if (accuracy >= 0.6) return 2;
-  if (accuracy >= 0.3) return 1;
-  return 0;
-}
-
-export default function SuccessStarOverlay({
-  score,
-  totalWords,
-  pointsEarned = 0,
-  onClose,
-}: SuccessStarOverlayProps) {
-  const stars = starCount(score, totalWords);
+export default function SuccessStarOverlay({ score, totalWords, pointsEarned = 0, onClose }: SuccessStarOverlayProps) {
+  const stars = starsFor(score, totalWords);
+  // Dismissable (Escape / backdrop) only when the caller gave us somewhere to
+  // jump to; without an onClose the learner advances through the results page.
+  const dialogRef = useDialogFocus({ open: true, onClose: onClose ?? (() => {}) });
 
   return (
     <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-fade-in select-none">
+      {/* Invisible full-bleed button: a click on the backdrop dismisses the
+          overlay for pointer users; keyboard users get Escape and the
+          Continue button instead. */}
+      {onClose && (
+        <button
+          type="button"
+          aria-label="Close results"
+          onClick={onClose}
+          className="absolute inset-0 cursor-default"
+        />
+      )}
       {/* Animated Star Burst Canvas Effect */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden flex items-center justify-center">
         {[...Array(16)].map((_, i) => (
@@ -44,7 +46,13 @@ export default function SuccessStarOverlay({
         ))}
       </div>
 
-      <div className="relative z-10 bg-white border-4 border-[#FBBF24] rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl text-center space-y-6 transform animate-bounce-once dark:bg-navy-800">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="success-star-title"
+        className="relative z-10 bg-white border-4 border-[#FBBF24] rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl text-center space-y-6 transform animate-bounce-once dark:bg-navy-800"
+      >
         <div className="relative inline-block">
           <BeeMascot size="xl" expression="celebrating" className="mx-auto" />
           <div className="absolute -top-3 -right-3 bg-[#F59E0B] text-[#0A1128] p-2 rounded-full shadow-md animate-spin-slow">
@@ -58,17 +66,22 @@ export default function SuccessStarOverlay({
             <span>Set Complete!</span>
           </div>
 
-          <h2 className="text-2xl sm:text-3xl font-black text-[#0A1128] dark:text-slate-100">Great Job!</h2>
+          <h2 id="success-star-title" className="text-2xl sm:text-3xl font-black text-[#0A1128] dark:text-slate-100">
+            Great Job!
+          </h2>
           <p className="text-sm font-medium text-[#64748B] dark:text-slate-400">
             You successfully finished all {totalWords} words in this set!
           </p>
         </div>
 
-        {/* Star Rating */}
-        <div className="flex items-center justify-center gap-2">
+        {/* Star Rating: the row reads as one image so screen readers hear the
+            score ("2 out of 3 stars") instead of three anonymous icons. */}
+        <div className="flex items-center justify-center gap-2" role="img" aria-label={`${stars} out of 3 stars`}>
           {[1, 2, 3].map((position) => (
             <Star
               key={position}
+              aria-hidden="true"
+              focusable="false"
               className={`w-10 h-10 sm:w-12 sm:h-12 ${
                 position <= stars
                   ? 'text-[#F59E0B] fill-[#F59E0B] drop-shadow-sm animate-pop'
@@ -89,9 +102,7 @@ export default function SuccessStarOverlay({
           <div className="w-px h-8 bg-[#E2E8F0] dark:bg-navy-600" />
           <div>
             <p className="text-[10px] font-mono uppercase text-[#64748B] dark:text-slate-400">Accuracy</p>
-            <p className="text-2xl font-black text-emerald-600">
-              {Math.round((score / totalWords) * 100)}%
-            </p>
+            <p className="text-2xl font-black text-emerald-600">{Math.round((score / totalWords) * 100)}%</p>
           </div>
           {pointsEarned > 0 && (
             <>
@@ -99,8 +110,7 @@ export default function SuccessStarOverlay({
               <div>
                 <p className="text-[10px] font-mono uppercase text-[#64748B] dark:text-slate-400">XP Earned</p>
                 <p className="text-2xl font-black text-amber-600 flex items-center gap-1">
-                  <Zap className="w-5 h-5 fill-current" />
-                  +{pointsEarned}
+                  <Zap className="w-5 h-5 fill-current" />+{pointsEarned}
                 </p>
               </div>
             </>

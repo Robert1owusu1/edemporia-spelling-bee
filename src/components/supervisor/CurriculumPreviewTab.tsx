@@ -3,18 +3,8 @@ import { Word } from '../../api/types';
 import { apiClient } from '../../api/client';
 import { speakWord } from '../VoiceSpellingParser';
 import { audioFx } from '../../utils/audioEffects';
-import {
-  BookOpen,
-  Volume2,
-  Search,
-  Filter,
-  Loader,
-  AlertCircle,
-  GraduationCap,
-  Trophy,
-  Target,
-  Sparkles,
-} from 'lucide-react';
+import { useAudioInit } from '../../hooks/useAudioInit';
+import { BookOpen, Volume2, Search, Loader, AlertCircle, GraduationCap, Trophy, Target, Sparkles } from 'lucide-react';
 
 interface TierInfo {
   tier: number;
@@ -31,56 +21,40 @@ export default function CurriculumPreviewTab() {
   const [wordsByTier, setWordsByTier] = useState<Record<number, Word[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [audioReady, setAudioReady] = useState(false);
+  // Bumping this drops the cached tier and refetches it (the Retry button).
+  const [reloadToken, setReloadToken] = useState(0);
+  const audioReady = useAudioInit();
 
-  // Initialize audio on first interaction
+  // Load the selected tier on demand instead of fetching all six up front:
+  // a single failed request now surfaces as a real error state (with Retry)
+  // rather than being swallowed into an empty word list.
   useEffect(() => {
-    const initAudio = () => {
-      audioFx.init();
-      if (audioFx.isAvailable()) {
-        setAudioReady(true);
-        document.removeEventListener('click', initAudio);
-        document.removeEventListener('touchstart', initAudio);
-      }
-    };
+    if (wordsByTier[selectedTier]) return;
+    const controller = new AbortController();
+    let cancelled = false;
 
-    document.addEventListener('click', initAudio);
-    document.addEventListener('touchstart', initAudio);
-
-    return () => {
-      document.removeEventListener('click', initAudio);
-      document.removeEventListener('touchstart', initAudio);
-    };
-  }, []);
-
-  // Load words for all tiers
-  useEffect(() => {
-    const loadAllWords = async () => {
+    const loadTier = async () => {
       setLoading(true);
       setError(null);
       try {
-        const entries = await Promise.all(
-          [1, 2, 3, 4, 5, 6].map(async (tier) => {
-            try {
-              const words = await apiClient.getWordsByTier(tier);
-              return [tier, words] as const;
-            } catch (err) {
-              console.error(`Failed to load tier ${tier}:`, err);
-              return [tier, []] as const;
-            }
-          })
-        );
-        setWordsByTier(Object.fromEntries(entries));
+        const words = await apiClient.getWordsByTier(selectedTier, undefined, { signal: controller.signal });
+        if (!cancelled) setWordsByTier((prev) => ({ ...prev, [selectedTier]: words }));
       } catch (err) {
-        setError('Failed to load curriculum words. Please refresh the page.');
-        console.error('Error loading words:', err);
+        if (cancelled || controller.signal.aborted) return;
+        setError(err instanceof Error ? err.message : 'Failed to load curriculum words.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
+    void loadTier();
 
-    loadAllWords();
-  }, []);
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+    // `wordsByTier` is only read for the cache guard; the state update that
+    // fills the cache is what ends the loop.
+  }, [selectedTier, reloadToken, wordsByTier]);
 
   // Tier configuration - Updated to be consistent across all tiers
   const tiers: TierInfo[] = [
@@ -139,50 +113,25 @@ export default function CurriculumPreviewTab() {
     (w) =>
       w.text.toLowerCase().includes(searchFilter.toLowerCase()) ||
       (w.category && w.category.toLowerCase().includes(searchFilter.toLowerCase())) ||
-      w.definition.toLowerCase().includes(searchFilter.toLowerCase())
+      w.definition.toLowerCase().includes(searchFilter.toLowerCase()),
   );
 
   const handlePlayAudio = (text: string) => {
-    if (!audioReady) {
-      audioFx.init();
-      if (audioFx.isAvailable()) {
-        setAudioReady(true);
-      } else {
-        console.warn('Audio not available');
-        return;
-      }
-    }
     audioFx.playClick();
     speakWord(text, 0.85);
   };
 
-  const currentTierInfo = tiers.find(t => t.tier === selectedTier);
+  const handleRetry = () => {
+    // Drop the failed tier from the cache so the effect refetches it.
+    setWordsByTier((prev) => {
+      const next = { ...prev };
+      delete next[selectedTier];
+      return next;
+    });
+    setReloadToken((token) => token + 1);
+  };
 
-  // Loading state
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <Loader className="w-12 h-12 text-amber-500 animate-spin" />
-        <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">Loading curriculum words...</p>
-      </div>
-    );
-  }
-
-  // Error state
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <AlertCircle className="w-12 h-12 text-red-500" />
-        <p className="mt-4 text-sm text-red-600">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="mt-4 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-600"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
+  const currentTierInfo = tiers.find((t) => t.tier === selectedTier);
 
   return (
     <div className="space-y-6">
@@ -234,13 +183,13 @@ export default function CurriculumPreviewTab() {
       {/* Curriculum Highlight Banner */}
       <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 text-amber-800 p-4 rounded-2xl shadow-sm flex items-center justify-between gap-3 dark:from-amber-500/10 dark:to-yellow-500/10 dark:border-amber-500/30 dark:text-amber-300">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 font-black text-lg shadow-xs">
+          <div className="w-10 h-10 rounded-xl bg-amber-500 text-amber-950 flex items-center justify-center shrink-0 font-black text-lg shadow-xs">
             📚
           </div>
           <div>
-            <h4 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
+            <h2 className="text-sm font-extrabold text-slate-900 dark:text-slate-100">
               {currentTierInfo?.label}: {currentTierInfo?.grade}
-            </h4>
+            </h2>
             <p className="text-xs text-slate-600 font-normal dark:text-slate-400">
               {currentTierInfo?.description} • {currentWords.length} words in this tier
             </p>
@@ -251,8 +200,16 @@ export default function CurriculumPreviewTab() {
       {/* Search & Word Cards List */}
       <div className="space-y-4">
         <div className="relative max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3 dark:text-slate-500" />
+          <Search
+            className="w-4 h-4 text-slate-400 absolute left-3 top-3 dark:text-slate-500"
+            aria-hidden="true"
+            focusable="false"
+          />
+          <label className="sr-only" htmlFor="curriculum-word-search">
+            Search word, definition, or category
+          </label>
           <input
+            id="curriculum-word-search"
             type="text"
             placeholder="Search word, definition, or category..."
             value={searchFilter}
@@ -261,7 +218,27 @@ export default function CurriculumPreviewTab() {
           />
         </div>
 
-        {filteredWords.length === 0 ? (
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-16 bg-white border border-slate-200/80 rounded-2xl dark:bg-navy-800 dark:border-navy-700">
+            <Loader className="w-8 h-8 text-amber-500 animate-spin" />
+            <p className="mt-4 text-sm text-slate-600 dark:text-slate-400">Loading curriculum words...</p>
+          </div>
+        ) : error ? (
+          <div
+            role="alert"
+            className="flex flex-col items-center justify-center py-16 bg-white border border-rose-200 rounded-2xl dark:bg-navy-800 dark:border-rose-500/30"
+          >
+            <AlertCircle className="w-8 h-8 text-red-500" />
+            <p className="mt-4 text-sm text-red-600 dark:text-rose-300">{error}</p>
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="mt-4 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-600 cursor-pointer"
+            >
+              Retry
+            </button>
+          </div>
+        ) : filteredWords.length === 0 ? (
           <div className="bg-white border border-slate-200/80 rounded-2xl p-10 text-center dark:bg-navy-800 dark:border-navy-700">
             <p className="text-sm text-slate-500 dark:text-slate-400">
               {searchFilter ? 'No words match your search.' : 'No words available in this tier yet.'}
@@ -290,9 +267,10 @@ export default function CurriculumPreviewTab() {
                       onClick={() => handlePlayAudio(w.text)}
                       className="p-1.5 rounded-lg bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors cursor-pointer dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
                       title="Listen to pronunciation"
+                      aria-label={`Listen to ${w.text}`}
                       disabled={!audioReady}
                     >
-                      <Volume2 className="w-3.5 h-3.5" />
+                      <Volume2 className="w-3.5 h-3.5" aria-hidden="true" focusable="false" />
                     </button>
                   </div>
 

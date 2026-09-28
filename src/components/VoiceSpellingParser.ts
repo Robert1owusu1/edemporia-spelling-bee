@@ -152,8 +152,11 @@ export function parseSpokenTranscript(transcript: string): string {
   if (!transcript) return '';
 
   const clean = transcript.toLowerCase().trim();
-  // Split on spaces, dashes, or dots
-  const tokens = clean.split(/[\s.\-]+/).filter(Boolean);
+  // Tokenise on runs of anything that is not a letter. Recognisers happily
+  // hand back "kay," or "em." — punctuation glued to a token must not push it
+  // past the phoneme map, because the whole-word fallback below would then
+  // contribute every raw letter and turn two spoken letters into six.
+  const tokens = clean.split(/[^a-z]+/).filter(Boolean);
 
   let result = '';
 
@@ -175,11 +178,11 @@ export function parseSpokenTranscript(transcript: string): string {
     } else if (token.length === 1 && /[a-z]/i.test(token)) {
       result += token;
     } else {
-      // Fallback: take first character if token is an unmapped single word
-      const lettersOnly = token.replace(/[^a-z]/gi, '');
-      if (lettersOnly.length > 0) {
-        result += lettersOnly;
-      }
+      // Whole-word fallback: an unmapped word ("kente") contributes every
+      // letter it contains, so spelling a word the ordinary way still
+      // resolves. Tokens are letter-only after the split above, so there is
+      // nothing left to strip here.
+      result += token;
     }
   }
 
@@ -187,30 +190,85 @@ export function parseSpokenTranscript(transcript: string): string {
 }
 
 /**
- * Helper to speak a given text aloud using SpeechSynthesis
+ * Subscribe to the browser voice list. `getVoices()` returns `[]` on the first
+ * call in several browsers and fills in later, so callers get an immediate
+ * emission plus every `voiceschanged` update until they unsubscribe.
  */
-export function speakWord(text: string, rate: number = 0.85, selectedVoiceURI?: string): Promise<void> {
+export function subscribeToVoices(callback: (voices: SpeechSynthesisVoice[]) => void): () => void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return () => {};
+  const emit = () => callback(window.speechSynthesis.getVoices());
+  emit();
+  window.speechSynthesis.addEventListener('voiceschanged', emit);
+  return () => window.speechSynthesis.removeEventListener('voiceschanged', emit);
+}
+
+/** Resolve with the voice list, tolerating the async first `getVoices()` call. */
+function getVoicesWhenReady(timeoutMs = 1500): Promise<SpeechSynthesisVoice[]> {
   return new Promise((resolve) => {
-    if (!('speechSynthesis' in window)) {
-      resolve();
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      resolve([]);
       return;
     }
-
-    window.speechSynthesis.cancel(); // Stop prior speech
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = rate;
-    utterance.pitch = 1.0;
-    utterance.volume = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const storedVoiceURI = selectedVoiceURI ?? localStorage.getItem('spelling_bee_speech_voice') ?? '';
-    // Prefer a local English voice where possible: it starts faster and is
-    // usually clearer for young learners than a remote fallback voice.
-    utterance.voice = voices.find((voice) => voice.voiceURI === storedVoiceURI)
-      || voices.find((voice) => voice.localService && voice.lang.toLowerCase().startsWith('en'))
-      || voices.find((voice) => voice.lang.toLowerCase().startsWith('en'))
-      || null;
-    utterance.onend = () => resolve();
-    utterance.onerror = () => resolve();
-    window.speechSynthesis.speak(utterance);
+    const initial = window.speechSynthesis.getVoices();
+    if (initial.length) {
+      resolve(initial);
+      return;
+    }
+    let unsubscribe = () => {};
+    const timer = window.setTimeout(() => {
+      unsubscribe();
+      resolve(window.speechSynthesis.getVoices());
+    }, timeoutMs);
+    unsubscribe = subscribeToVoices((voices) => {
+      if (!voices.length) return;
+      window.clearTimeout(timer);
+      unsubscribe();
+      resolve(voices);
+    });
   });
+}
+
+/** Generous upper bound so a browser that never fires `onend` can't hang callers. */
+function speechTimeoutMs(text: string, rate: number): number {
+  return 2000 + (text.length * 300) / Math.max(rate, 0.1);
+}
+
+/**
+ * Helper to speak a given text aloud using SpeechSynthesis.
+ * Always resolves — some browsers never fire `onend`, so the promise races a
+ * timeout instead of leaving the caller waiting forever.
+ */
+export function speakWord(text: string, rate: number = 0.85, selectedVoiceURI?: string): Promise<void> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return Promise.resolve();
+
+  window.speechSynthesis.cancel(); // Stop prior speech
+  return getVoicesWhenReady().then(
+    (voices) =>
+      new Promise<void>((resolve) => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = rate;
+        utterance.pitch = 1.0;
+        utterance.volume = 1;
+        const storedVoiceURI = selectedVoiceURI ?? localStorage.getItem('spelling_bee_speech_voice') ?? '';
+        // Prefer a local English voice where possible: it starts faster and is
+        // usually clearer for young learners than a remote fallback voice.
+        utterance.voice =
+          voices.find((voice) => voice.voiceURI === storedVoiceURI) ||
+          voices.find((voice) => voice.localService && voice.lang.toLowerCase().startsWith('en')) ||
+          voices.find((voice) => voice.lang.toLowerCase().startsWith('en')) ||
+          null;
+
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          resolve();
+        };
+        const timer = window.setTimeout(finish, speechTimeoutMs(text, rate));
+        utterance.onend = finish;
+        utterance.onerror = finish;
+        window.speechSynthesis.speak(utterance);
+      }),
+  );
 }

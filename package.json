@@ -1,5 +1,5 @@
 {
-  "name": "react-example",
+  "name": "spelling-bee",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,7 +12,13 @@
     "db:migrate": "npm --prefix backend run prisma:migrate",
     "clean": "rm -rf dist server.js",
     "test:e2e": "npm --prefix backend run test:e2e",
-    "lint": "tsc --noEmit"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -28,14 +34,23 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.18",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "typescript-eslint": "^8.70.1",
+    "vite": "^6.2.3",
+    "vitest": "^5.0.2"
   }
 }

@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
@@ -44,35 +44,62 @@ export default defineConfig(() => {
               if (id.includes('date-fns') || id.includes('clsx') || id.includes('classnames')) {
                 return 'vendor-utils';
               }
-              if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
+              // react's own runtime dependencies must live beside react and
+              // react-dom, otherwise vendor-react and vendor-other import each
+              // other and Rollup reports a circular chunk. They are loaded
+              // eagerly either way, so the first-load payload does not change.
+              if (
+                id.includes('react') ||
+                id.includes('react-dom') ||
+                id.includes('react-router') ||
+                id.includes('scheduler') ||
+                id.includes('use-sync-external-store')
+              ) {
                 return 'vendor-react';
               }
               return 'vendor-other';
             }
+            // Shared app runtime: the contexts, API client, hooks and utils are
+            // imported by the entry point *and* by every lazy page. Giving them
+            // a chunk of their own stops the page chunks from importing each
+            // other (Rollup warns about those cycles) and keeps exactly the same
+            // modules in the first-load payload.
+            if (
+              id.includes('/src/context/') ||
+              id.includes('/src/api/') ||
+              id.includes('/src/utils/') ||
+              id.includes('/src/hooks/') ||
+              // VoiceSpellingParser is a plain module pulled in by the
+              // useSpeechRecognition hook, so it travels with the hooks.
+              id.includes('/src/components/VoiceSpellingParser')
+            ) {
+              return 'app-core';
+            }
+            // Supervisor dashboard is heavy and its tabs live in /components,
+            // so this rule has to run before the page-only rules below.
+            if (
+              id.includes('SupervisorDashboard') ||
+              id.includes('SupervisorAnalytics') ||
+              id.includes('ClassroomManager') ||
+              id.includes('CurriculumPreviewTab')
+            ) {
+              return 'page-supervisor';
+            }
             // Page chunks - lazy loaded pages (only for pages, not components)
             if (id.includes('/pages/')) {
-              // Supervisor dashboard is heavy - separate chunk
-              if (id.includes('SupervisorDashboard') || id.includes('SupervisorAnalytics') ||
-                  id.includes('AssignmentManager') || id.includes('MaterialsLibrary') ||
-                  id.includes('ClassroomManager') || id.includes('CurriculumPreviewTab')) {
-                return 'page-supervisor';
-              }
               // Admin pages
               if (id.includes('/admin/') || id.includes('Admin')) {
                 return 'page-admin';
               }
-              // Org pages
-              if (id.includes('/org/') || id.includes('Org')) {
-                return 'page-org';
-              }
               // Game pages
-              if (id.includes('GameLoop') || id.includes('RoundResult') || id.includes('DailyChallenge') ||
-                  id.includes('Battles') || id.includes('TrailMap') || id.includes('PlacementQuiz')) {
+              if (
+                id.includes('GameLoop') ||
+                id.includes('RoundResult') ||
+                id.includes('DailyChallenge') ||
+                id.includes('TrailMap') ||
+                id.includes('PlacementQuiz')
+              ) {
                 return 'page-game';
-              }
-              // Learning hub
-              if (id.includes('LearningHub') || id.includes('TeacherLearningHub') || id.includes('AssignmentAttempt')) {
-                return 'page-learning';
               }
               return 'page-other';
             }

@@ -1,40 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { apiClient } from '../api/client';
-import { Word, RoundResultResponse } from '../api/types';
+import { apiClient, ApiError } from '../api/client';
+import { Word, RoundResultResponse, WordFeedback } from '../api/types';
 import Navbar from '../components/Navbar';
 import SpellingInteraction from '../components/SpellingInteraction';
 import SuccessStarOverlay from '../components/SuccessStarOverlay';
 import BeeMascot from '../components/BeeMascot';
 import { WordBankSkeleton } from '../components/common/Skeletons';
 import { audioFx } from '../utils/audioEffects';
-import { Heart, ArrowLeft, Flame, Trophy, Zap, CheckCircle2, XCircle, ArrowRight } from 'lucide-react';
+import { scoreWord, scoreRound, MAX_COMBO } from '../utils/scoring';
+import {
+  Heart,
+  ArrowLeft,
+  Flame,
+  Trophy,
+  Zap,
+  CheckCircle2,
+  XCircle,
+  ArrowRight,
+  RefreshCw,
+  AlertCircle,
+} from 'lucide-react';
 
-interface WordFeedback {
-  word: Word;
-  isCorrect: boolean;
-  userSpelling: string;
-  attempts: number;
-  xpEarned: number;
+// Shared shell for every state this route can land in (loading, empty word
+// bank, load error, out of hearts, playing). Each state used to ship its own
+// copy of the wrapper, which meant the heading level depended on which branch
+// was mounted. One shell = one <main> and exactly one <h1> (the round title,
+// sr-only because the visible titles live inside the branch content).
+// `spaced` is only on for branches that stack several cards.
+function GameShell({
+  children,
+  overlay,
+  spaced = false,
+}: {
+  children: React.ReactNode;
+  overlay?: React.ReactNode;
+  spaced?: boolean;
+}) {
+  return (
+    <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
+      <Navbar />
+      <main id="main-content" className={`flex-1 max-w-3xl w-full mx-auto px-4 py-8${spaced ? ' space-y-6' : ''}`}>
+        <h1 className="sr-only">Spelling practice round</h1>
+        {children}
+      </main>
+      {overlay}
+    </div>
+  );
 }
 
 export default function GameLoopPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { activeStudent, updateActiveStudentState } = useAuth();
+  const { activeStudent, updateActiveStudentState, refreshStudents } = useAuth();
 
   const tierParam = Number(searchParams.get('tier')) || activeStudent?.currentTier || 1;
 
   const [words, setWords] = useState<Word[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by the retry button so a failed word fetch can be re-run.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [outOfHearts, setOutOfHearts] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Gamification states
-  const [comboStreak, setComboStreak] = useState(0);
+  // Gamification states. The combo is seeded from the learner's stored streak
+  // because the server carries it across rounds (Student.streak persists
+  // between submissions) — starting at 0 here would make the on-screen combo
+  // and the points the server writes disagree.
+  const [comboStreak, setComboStreak] = useState(() => Math.min(Math.max(activeStudent?.streak ?? 0, 0), MAX_COMBO));
   const [score, setScore] = useState(0);
-  const [wordResults, setWordResults] = useState<{ word: Word; isCorrect: boolean; userSpelling: string }[]>([]);
+  const [wordResults, setWordResults] = useState<WordFeedback[]>([]);
   const [feedback, setFeedback] = useState<WordFeedback | null>(null);
 
   // Success Modal Star Burst state
@@ -49,29 +87,44 @@ export default function GameLoopPage() {
   // went to next.
   const timersRef = useRef<number[]>([]);
 
-  useEffect(() => () => {
-    timersRef.current.forEach((timer) => clearTimeout(timer));
-    timersRef.current = [];
-  }, []);
+  useEffect(
+    () => () => {
+      timersRef.current.forEach((timer) => clearTimeout(timer));
+      timersRef.current = [];
+    },
+    [],
+  );
 
   const delayThenNavigate = (callback: () => void) => {
     timersRef.current.push(window.setTimeout(callback, 2800));
   };
 
   useEffect(() => {
+    // Cancel the word fetch if the learner leaves (or a retry supersedes it),
+    // so a slow response can't overwrite the next screen.
+    const controller = new AbortController();
+
     async function loadWords() {
       setIsLoading(true);
+      setLoadError(null);
       try {
-        const fetched = await apiClient.getWordsByTier(tierParam, activeStudent?.id);
+        const fetched = await apiClient.getWordsByTier(tierParam, activeStudent?.id, { signal: controller.signal });
         setWords(fetched.slice(0, 5));
         roundStartedAtRef.current = Date.now();
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        // "Request failed" must stay distinct from "the server has no words":
+        // only the retry state may claim the word bank is empty.
+        setWords([]);
+        setLoadError(err instanceof Error ? err.message : 'Could not load words for this round.');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     }
     loadWords();
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tierParam]);
+  }, [tierParam, loadAttempt]);
 
   const currentWord = words[currentIndex];
 
@@ -80,12 +133,18 @@ export default function GameLoopPage() {
 
     const isCorrect = spelledText.toLowerCase() === currentWord.text.toLowerCase();
 
-    // Score and combo update (mirrors the backend's formula so the numbers the
-    // learner sees in the feedback panel match what the round will award).
+    // The server scores on the combo BEFORE this word increments it
+    // (backend/src/controllers/roundController.js), so capture `comboStreak`
+    // now — after the increment below, the floating "+N" and the stored
+    // points would drift apart by one bonus step on every word.
+    const xpEarned = scoreWord(currentWord.tier, comboStreak, isCorrect);
+
+    // Combo and score update. The combo is capped like MAX_STUDENT_STREAK so
+    // the display matches the value the server will persist.
     let newCombo = comboStreak;
     let updatedScore = score;
     if (isCorrect) {
-      newCombo += 1;
+      newCombo = Math.min(newCombo + 1, MAX_COMBO);
       updatedScore += 1;
       setComboStreak(newCombo);
       setScore(updatedScore);
@@ -96,35 +155,58 @@ export default function GameLoopPage() {
       setComboStreak(0);
       audioFx.playIncorrect();
     }
-    const xpEarned = isCorrect
-      ? Math.round(currentWord.tier * 10 * (1 + Math.min(newCombo, 10) * 0.1))
-      : 0;
 
-    setWordResults((prev) => [...prev, { word: currentWord, isCorrect, userSpelling: spelledText }]);
-    setFeedback({ word: currentWord, isCorrect, userSpelling: spelledText, attempts: attemptsCount, xpEarned });
+    setWordResults((prev) => [
+      ...prev,
+      { word: currentWord, isCorrect, userSpelling: spelledText, attempts: attemptsCount, combo: newCombo, xpEarned },
+    ]);
+    setFeedback({
+      word: currentWord,
+      isCorrect,
+      userSpelling: spelledText,
+      attempts: attemptsCount,
+      combo: newCombo,
+      xpEarned,
+    });
   };
 
-  const finishRound = async (results: { word: Word; isCorrect: boolean; userSpelling: string }[], finalScore: number) => {
+  const finishRound = async (results: WordFeedback[], finalScore: number) => {
     setIsSubmitting(true);
     setShowSuccessOverlay(true);
     setOverlayPoints(results.filter((r) => r.isCorrect).length);
     audioFx.playVictory();
 
-    const durationSeconds = roundStartedAtRef.current ? Math.max(1, Math.round((Date.now() - roundStartedAtRef.current) / 1000)) : undefined;
+    const durationSeconds = roundStartedAtRef.current
+      ? Math.max(1, Math.round((Date.now() - roundStartedAtRef.current) / 1000))
+      : undefined;
+    // Points the browser would award if the server can't be reached — always
+    // derived from the same shared scoring helper as the on-screen feedback.
+    // WordFeedback.combo includes its own word; scoring uses the combo before
+    // it, exactly like the server does.
+    const localPointsEarned = scoreRound(
+      results.map((r) => ({ tier: r.word.tier, combo: Math.max(r.combo - 1, 0), correct: r.isCorrect })),
+    );
 
     try {
       if (activeStudent) {
         const apiResult: RoundResultResponse = await apiClient.submitRound({
           studentId: activeStudent.id,
-          results: results.map((result) => ({ wordId: result.word.id, correct: result.isCorrect, attempts: 1, spelling: result.userSpelling })),
+          results: results.map((result) => ({
+            wordId: result.word.id,
+            correct: result.isCorrect,
+            attempts: result.attempts,
+            spelling: result.userSpelling,
+          })),
           tier: tierParam,
           durationSeconds,
         });
 
         updateActiveStudentState({
           hearts: apiResult.heartsRemaining ?? activeStudent.hearts,
-          points: apiResult.totalPoints ?? activeStudent.points + apiResult.pointsEarned,
-          streak: apiResult.streakDays ?? activeStudent.streak,
+          points: apiResult.totalPoints ?? activeStudent.points + (apiResult.pointsEarned ?? 0),
+          streak: apiResult.streak ?? activeStudent.streak,
+          dailyStreak:
+            apiResult.dailyStreak ?? apiResult.streakDays ?? activeStudent.dailyStreak ?? activeStudent.streakDays,
           currentTier: apiResult.currentTier ?? activeStudent.currentTier,
         });
         setOverlayPoints(apiResult.pointsEarned || 0);
@@ -137,8 +219,13 @@ export default function GameLoopPage() {
               score: finalScore,
               totalWords: words.length,
               pointsEarned: apiResult.pointsEarned || 0,
-              streakDays: apiResult.streakDays || activeStudent.streak,
-              heartsRemaining: apiResult.heartsRemaining || activeStudent.hearts,
+              streakDays:
+                apiResult.dailyStreak ??
+                apiResult.streakDays ??
+                activeStudent.dailyStreak ??
+                activeStudent.streakDays ??
+                0,
+              heartsRemaining: apiResult.heartsRemaining ?? activeStudent.hearts ?? 5,
               tierAdvanced: apiResult.tierAdvanced,
               earnedBadges: apiResult.earnedBadges || [],
               totalSpentSeconds: apiResult.totalSpentSeconds,
@@ -154,16 +241,30 @@ export default function GameLoopPage() {
               tier: tierParam,
               score: finalScore,
               totalWords: words.length,
-              pointsEarned: results.filter((r) => r.isCorrect).length * 10,
-              streakDays: 1,
-              heartsRemaining: 3,
+              pointsEarned: localPointsEarned,
+              streakDays: 0,
+              heartsRemaining: 5,
               earnedBadges: [],
               results,
             },
           });
         });
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 423) {
+        // HTTP 423 = the learner is out of hearts. Show a dedicated state that
+        // explains hearts refill over time instead of a generic error, and
+        // resync the learner from whatever the server sent back.
+        setShowSuccessOverlay(false);
+        setIsSubmitting(false);
+        setOutOfHearts(true);
+        const payload = (err.body || {}) as Partial<RoundResultResponse> & { student?: { hearts?: number } };
+        const serverHearts = payload.heartsRemaining ?? payload.student?.hearts;
+        if (typeof serverHearts === 'number') updateActiveStudentState({ hearts: serverHearts });
+        void refreshStudents();
+        return;
+      }
+
       // A network hiccup shouldn't lose the learner's progress: keep the
       // round local and finish the game. The results carry the learner's
       // actual spelling so nothing important is lost.
@@ -174,9 +275,9 @@ export default function GameLoopPage() {
             tier: tierParam,
             score: finalScore,
             totalWords: words.length,
-            pointsEarned: results.filter((r) => r.isCorrect).length * 10,
-            streakDays: activeStudent?.streak || 1,
-            heartsRemaining: activeStudent?.hearts || 3,
+            pointsEarned: localPointsEarned,
+            streakDays: activeStudent?.dailyStreak ?? activeStudent?.streakDays ?? 0,
+            heartsRemaining: activeStudent?.hearts ?? 5,
             earnedBadges: [],
             results,
             syncError: true,
@@ -202,27 +303,98 @@ export default function GameLoopPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
-        <Navbar />
-        <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 space-y-6">
-          <WordBankSkeleton />
-        </main>
-      </div>
+      <GameShell>
+        <WordBankSkeleton />
+      </GameShell>
     );
   }
 
-  if (!words.length) {
+  if (!words.length && !loadError && !outOfHearts) {
     return (
-      <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
-        <Navbar />
-        <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8">
-          <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-6 text-center shadow-xs">
-            <h1 className="text-lg font-bold text-amber-950 dark:text-amber-300">No words are available for this round</h1>
-            <p className="mt-2 text-sm text-amber-900 dark:text-amber-300">Choose another tier or ask a supervisor to add words to the word bank.</p>
-            <button type="button" onClick={() => navigate('/trail')} className="mt-5 min-tap rounded-xl bg-slate-900 dark:bg-navy-700 px-4 py-2 text-sm font-bold text-amber-400">Back to trail</button>
+      <GameShell>
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 p-6 text-center shadow-xs">
+          <h2 className="text-lg font-bold text-amber-950 dark:text-amber-300">
+            No words are available for this round
+          </h2>
+          <p className="mt-2 text-sm text-amber-900 dark:text-amber-300">
+            Choose another tier or ask a supervisor to add words to the word bank.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/trail')}
+            className="mt-5 min-tap rounded-xl bg-slate-900 dark:bg-navy-700 px-4 py-2 text-sm font-bold text-amber-400"
+          >
+            Back to trail
+          </button>
+        </div>
+      </GameShell>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <GameShell>
+        <div
+          role="alert"
+          className="rounded-2xl border border-rose-200 dark:border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 p-6 text-center shadow-xs"
+        >
+          <AlertCircle className="w-8 h-8 text-rose-500 mx-auto" aria-hidden="true" focusable="false" />
+          <h2 className="mt-3 text-lg font-bold text-rose-950 dark:text-rose-300">We couldn't load this round</h2>
+          <p className="mt-2 text-sm text-rose-900 dark:text-rose-300">{loadError}</p>
+          <div className="mt-5 flex flex-col sm:flex-row justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+              className="inline-flex min-tap items-center justify-center gap-2 rounded-xl bg-slate-900 dark:bg-navy-700 px-4 py-2 text-sm font-bold text-amber-400 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" aria-hidden="true" focusable="false" />
+              <span>Try again</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/trail')}
+              className="min-tap rounded-xl bg-white dark:bg-navy-800 border border-slate-200 dark:border-navy-700 px-4 py-2 text-sm font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+            >
+              Back to trail
+            </button>
           </div>
-        </main>
-      </div>
+        </div>
+      </GameShell>
+    );
+  }
+
+  if (outOfHearts) {
+    return (
+      <GameShell>
+        {/* Assertive: this replaces the round, so it must interrupt. */}
+        <div
+          role="alert"
+          className="rounded-2xl border-2 border-rose-300 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-500/10 p-6 text-center shadow-xs space-y-3"
+        >
+          <Heart className="w-10 h-10 text-rose-500 mx-auto fill-current" aria-hidden="true" focusable="false" />
+          <h2 className="text-lg font-bold text-rose-950 dark:text-rose-300">You're out of hearts</h2>
+          <p className="text-sm text-rose-900 dark:text-rose-300">
+            No worries — hearts refill over time. Take a break and come back to keep practising, or try the daily
+            challenge later.
+          </p>
+          <div className="flex flex-col sm:flex-row justify-center gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => navigate('/home')}
+              className="min-tap rounded-xl bg-slate-900 dark:bg-navy-700 px-4 py-2 text-sm font-bold text-amber-400 cursor-pointer"
+            >
+              Back to home
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/trail')}
+              className="min-tap rounded-xl bg-white dark:bg-navy-800 border border-slate-200 dark:border-navy-700 px-4 py-2 text-sm font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+            >
+              Back to trail
+            </button>
+          </div>
+        </div>
+      </GameShell>
     );
   }
 
@@ -230,153 +402,173 @@ export default function GameLoopPage() {
   const progressPercent = Math.round((completedWords / words.length) * 100);
 
   return (
-    <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
-      <Navbar />
+    <GameShell
+      spaced
+      overlay={
+        showSuccessOverlay ? (
+          <SuccessStarOverlay
+            score={score}
+            totalWords={words.length}
+            pointsEarned={overlayPoints}
+            onClose={() => setShowSuccessOverlay(false)}
+          />
+        ) : null
+      }
+    >
+      {/* Single polite live region for the round. Every per-word result
+          (correct/incorrect, XP, combo, hearts left) funnels through this
+          one node so the announcement happens when the feedback panel lands
+          rather than on each re-render of the page. */}
+      <p className="sr-only" role="status">
+        {feedback
+          ? [
+              feedback.isCorrect ? 'Correct!' : 'Not quite.',
+              `The word is ${feedback.word.text}.`,
+              feedback.isCorrect
+                ? `${feedback.xpEarned} XP earned.`
+                : `You spelled ${feedback.userSpelling || 'nothing'}.`,
+              comboStreak > 1 ? `${comboStreak} word combo.` : '',
+              `You have ${activeStudent?.hearts ?? 5} hearts left.`,
+            ]
+              .filter(Boolean)
+              .join(' ')
+          : ''}
+      </p>
+      {/* Top Game Round Header & Gamified Status */}
+      <div className="bg-slate-900 dark:bg-navy-700 border border-slate-800 dark:border-navy-700 text-white rounded-2xl p-4 shadow-md space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              audioFx.playClick();
+              navigate('/trail');
+            }}
+            className="flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white transition-colors cursor-pointer min-tap"
+          >
+            <ArrowLeft className="w-4 h-4 text-amber-400" />
+            <span>Exit Practice</span>
+          </button>
 
-      <main className="flex-1 max-w-3xl w-full mx-auto px-4 py-8 space-y-6">
-        {/* Top Game Round Header & Gamified Status */}
-        <div className="bg-slate-900 dark:bg-navy-700 border border-slate-800 dark:border-navy-700 text-white rounded-2xl p-4 shadow-md space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                audioFx.playClick();
-                navigate('/trail');
-              }}
-              className="flex items-center gap-1.5 text-xs font-bold text-slate-300 hover:text-white transition-colors cursor-pointer min-tap"
-            >
-              <ArrowLeft className="w-4 h-4 text-amber-400" />
-              <span>Exit Practice</span>
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {comboStreak > 1 && (
+              <div className="flex items-center gap-1 text-xs font-black bg-gradient-to-r from-orange-500 to-amber-500 text-white px-3 py-1 rounded-full shadow-xs animate-pulse">
+                <Flame className="w-4 h-4 text-yellow-200 fill-current" />
+                <span>{comboStreak}x Combo!</span>
+              </div>
+            )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              {comboStreak > 1 && (
-                <div className="flex items-center gap-1 text-xs font-black bg-gradient-to-r from-orange-500 to-amber-500 text-white px-3 py-1 rounded-full shadow-xs animate-pulse">
-                  <Flame className="w-4 h-4 text-yellow-200 fill-current" />
-                  <span>{comboStreak}x Streak!</span>
-                </div>
-              )}
-
-              <span className="text-xs font-extrabold text-amber-300 bg-slate-800 dark:bg-navy-800 border border-slate-700 dark:border-navy-600 px-3 py-1 rounded-lg">
-                Tier {tierParam} Level
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5 text-xs font-black text-rose-300 bg-rose-950/80 px-3 py-1 rounded-lg border border-rose-800">
-              <Heart className="w-4 h-4 fill-current text-rose-400" />
-              <span>{activeStudent?.hearts ?? 3}</span>
-            </div>
+            <span className="text-xs font-extrabold text-amber-300 bg-slate-800 dark:bg-navy-800 border border-slate-700 dark:border-navy-600 px-3 py-1 rounded-lg">
+              Tier {tierParam} Level
+            </span>
           </div>
 
-          {/* Honey XP Progress Bar */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-[11px] font-bold text-slate-300">
-              <span>Word Progress: {completedWords} of {words.length}</span>
-              <span className="text-amber-400 font-extrabold">{progressPercent}% Completed</span>
-            </div>
-            <div className="w-full bg-slate-800 dark:bg-navy-800 h-3 rounded-full overflow-hidden border border-slate-700 dark:border-navy-600 p-0.5">
-              <div
-                className="bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-300 h-full rounded-full transition-all duration-500 shadow-sm"
-                style={{ width: `${Math.max(5, progressPercent)}%` }}
-              />
-            </div>
+          <div className="flex items-center gap-1.5 text-xs font-black text-rose-300 bg-rose-950/80 px-3 py-1 rounded-lg border border-rose-800">
+            <Heart className="w-4 h-4 fill-current text-rose-400" />
+            <span>{activeStudent?.hearts ?? 5}</span>
           </div>
         </div>
 
-        {feedback ? (
-          /* ---- Per-word result feedback ---- */
-          <div
-            className={`rounded-2xl p-6 sm:p-8 shadow-md max-w-2xl mx-auto relative overflow-hidden border-2 ${
-              feedback.isCorrect
-                ? 'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-400'
-                : 'bg-gradient-to-br from-rose-50 to-orange-50 border-rose-300'
-            }`}
-          >
-            {feedback.isCorrect && (
-              <div className="pointer-events-none absolute -top-10 -right-10 w-40 h-40 rounded-full bg-emerald-300/30 blur-2xl" />
-            )}
-            <div className="relative z-10 flex flex-col items-center gap-5 text-center">
-              <BeeMascot size="lg" expression={feedback.isCorrect ? 'celebrating' : 'cheering'} className="animate-float" />
-
-              <div className="space-y-1.5">
-                <span
-                  className={`inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-wider px-3 py-1 rounded-full ${
-                    feedback.isCorrect
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-rose-100 text-rose-800 border border-rose-300'
-                  }`}
-                >
-                  {feedback.isCorrect ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                  {feedback.isCorrect ? 'Correct!' : 'Not quite!'}
-                </span>
-
-                <h2 className="text-2xl sm:text-4xl font-black tracking-widest uppercase text-slate-900 break-words leading-tight">
-                  {feedback.word.text}
-                </h2>
-
-                {!feedback.isCorrect && (
-                  <p className="text-sm font-semibold text-rose-700">
-                    You spelled: “{feedback.userSpelling || '—'}”
-                  </p>
-                )}
-
-                {feedback.isCorrect && feedback.xpEarned > 0 && (
-                  <div className="inline-flex items-center gap-1.5 bg-amber-400 text-slate-950 font-black text-sm px-4 py-1.5 rounded-full shadow-sm animate-pop">
-                    <Zap className="w-4 h-4 fill-current" />
-                    +{feedback.xpEarned} XP
-                  </div>
-                )}
-                {feedback.isCorrect && feedback.xpEarned === 0 && (
-                  <p className="text-xs font-bold text-emerald-700">Nicely done! No points this round.</p>
-                )}
-              </div>
-
-              <p className="text-xs font-medium text-slate-600 max-w-md">
-                {feedback.isCorrect
-                  ? 'Brilliant spelling! You are on a roll.'
-                  : `The correct spelling is shown above. Take a deep breath and try the next one — you've got this!`}
-              </p>
-
-              <button
-                type="button"
-                onClick={handleFeedbackContinue}
-                className="w-full sm:w-auto min-tap bg-slate-900 dark:bg-navy-700 hover:bg-slate-800 dark:hover:bg-navy-800 text-amber-400 font-extrabold text-xs uppercase tracking-wider py-3 px-8 rounded-xl transition-all cursor-pointer shadow-md flex items-center justify-center gap-2 active:scale-[0.98]"
-              >
-                {currentIndex < words.length - 1 ? (
-                  <>
-                    <span>Next Word</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                ) : (
-                  <>
-                    <Trophy className="w-4 h-4" />
-                    <span>Finish Round</span>
-                  </>
-                )}
-              </button>
-            </div>
+        {/* Honey XP Progress Bar */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px] font-bold text-slate-300">
+            <span>
+              Word Progress: {completedWords} of {words.length}
+            </span>
+            <span className="text-amber-400 font-extrabold">{progressPercent}% Completed</span>
           </div>
-        ) : (
-          currentWord && (
-            <SpellingInteraction
-              word={currentWord}
-              onSubmit={handleWordSubmit}
-              isSubmitting={isSubmitting}
-              comboStreak={comboStreak}
+          <div className="w-full bg-slate-800 dark:bg-navy-800 h-3 rounded-full overflow-hidden border border-slate-700 dark:border-navy-600 p-0.5">
+            <div
+              className="bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-300 h-full rounded-full transition-all duration-500 shadow-sm"
+              style={{ width: `${Math.max(5, progressPercent)}%` }}
             />
-          )
-        )}
-      </main>
+          </div>
+        </div>
+      </div>
 
-      {/* Success Star Burst Overlay Modal */}
-      {showSuccessOverlay && (
-        <SuccessStarOverlay
-          score={score}
-          totalWords={words.length}
-          pointsEarned={overlayPoints}
-          onClose={() => setShowSuccessOverlay(false)}
-        />
+      {feedback ? (
+        /* ---- Per-word result feedback ---- */
+        <div
+          className={`rounded-2xl p-6 sm:p-8 shadow-md max-w-2xl mx-auto relative overflow-hidden border-2 ${
+            feedback.isCorrect
+              ? 'bg-gradient-to-br from-emerald-50 to-teal-50 border-emerald-400'
+              : 'bg-gradient-to-br from-rose-50 to-orange-50 border-rose-300'
+          }`}
+        >
+          {feedback.isCorrect && (
+            <div className="pointer-events-none absolute -top-10 -right-10 w-40 h-40 rounded-full bg-emerald-300/30 blur-2xl" />
+          )}
+          <div className="relative z-10 flex flex-col items-center gap-5 text-center">
+            <BeeMascot
+              size="lg"
+              expression={feedback.isCorrect ? 'celebrating' : 'cheering'}
+              className="animate-float"
+            />
+
+            <div className="space-y-1.5">
+              <span
+                className={`inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-wider px-3 py-1 rounded-full ${
+                  feedback.isCorrect
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-rose-100 text-rose-800 border border-rose-300'
+                }`}
+              >
+                {feedback.isCorrect ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                {feedback.isCorrect ? 'Correct!' : 'Not quite!'}
+              </span>
+
+              <h2 className="text-2xl sm:text-4xl font-black tracking-widest uppercase text-slate-900 break-words leading-tight">
+                {feedback.word.text}
+              </h2>
+
+              {!feedback.isCorrect && (
+                <p className="text-sm font-semibold text-rose-700">You spelled: “{feedback.userSpelling || '—'}”</p>
+              )}
+
+              {feedback.isCorrect && feedback.xpEarned > 0 && (
+                <div className="inline-flex items-center gap-1.5 bg-amber-400 text-slate-950 font-black text-sm px-4 py-1.5 rounded-full shadow-sm animate-pop">
+                  <Zap className="w-4 h-4 fill-current" />+{feedback.xpEarned} XP
+                </div>
+              )}
+              {feedback.isCorrect && feedback.xpEarned === 0 && (
+                <p className="text-xs font-bold text-emerald-700">Nicely done! No points this round.</p>
+              )}
+            </div>
+
+            <p className="text-xs font-medium text-slate-600 max-w-md">
+              {feedback.isCorrect
+                ? 'Brilliant spelling! You are on a roll.'
+                : `The correct spelling is shown above. Take a deep breath and try the next one — you've got this!`}
+            </p>
+
+            <button
+              type="button"
+              onClick={handleFeedbackContinue}
+              className="w-full sm:w-auto min-tap bg-slate-900 dark:bg-navy-700 hover:bg-slate-800 dark:hover:bg-navy-800 text-amber-400 font-extrabold text-xs uppercase tracking-wider py-3 px-8 rounded-xl transition-all cursor-pointer shadow-md flex items-center justify-center gap-2 active:scale-[0.98]"
+            >
+              {currentIndex < words.length - 1 ? (
+                <>
+                  <span>Next Word</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              ) : (
+                <>
+                  <Trophy className="w-4 h-4" />
+                  <span>Finish Round</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      ) : (
+        currentWord && (
+          <SpellingInteraction
+            word={currentWord}
+            onSubmit={handleWordSubmit}
+            isSubmitting={isSubmitting}
+            comboStreak={comboStreak}
+          />
+        )
       )}
-    </div>
+    </GameShell>
   );
 }

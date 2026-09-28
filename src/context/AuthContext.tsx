@@ -20,12 +20,7 @@ interface AuthContextType {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<Account>;
   loginWithStudentCode: (studentCode: string) => Promise<Account>;
-  signup: (
-    email: string,
-    password: string,
-    role?: 'parent' | 'teacher',
-    name?: string
-  ) => Promise<void>;
+  signup: (email: string, password: string, role?: 'parent' | 'teacher', name?: string) => Promise<void>;
   logout: () => void;
   selectStudent: (student: Student) => void;
   refreshStudents: () => Promise<Student[]>;
@@ -35,6 +30,7 @@ interface AuthContextType {
   authError: string | null;
   clearAuthError: () => void;
   updateProfile: (data: { name?: string; avatarUrl?: string }) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<string>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -44,7 +40,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [account, setAccountState] = useState<Account | null>(getStoredAccount());
   const [students, setStudents] = useState<Student[]>([]);
   const [activeStudent, setActiveStudentState] = useState<Student | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  // A stored token means the roster still has to be re-fetched on page load, so
+  // start in the loading state: otherwise ProfilePicker flashes an empty roster
+  // (and ProtectedRoute a blank route) before the first response lands. Later
+  // background refreshes deliberately do NOT re-raise this flag, so the
+  // supervisor/game screens don't get replaced by a full-page spinner every time
+  // the roster is re-synced.
+  const [isLoading, setIsLoading] = useState<boolean>(!!getStoredToken());
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,7 +98,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       return studentArray;
     } catch {
+      // Keep whatever roster we already had; the caller decides how to report it.
       return [];
+    } finally {
+      // Covers the initial load too (the reason isLoading starts true with a
+      // stored token), so the skeleton only lasts as long as the request.
+      setIsLoading(false);
     }
   };
 
@@ -121,10 +128,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setStoredActiveStudentId(null);
       }
       return response.account;
-    } catch (err: any) {
-      const msg = err.message || 'Login failed. Please check your credentials.';
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : 'Login failed. Please check your credentials.';
       setAuthError(msg);
-      throw new Error(msg);
+      // `cause` preserves the real failure (network, 500 body) for debuggers
+      // while the surfaced message stays user-facing.
+      throw new Error(msg, { cause: err });
     } finally {
       setIsLoading(false);
     }
@@ -151,21 +160,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setStoredActiveStudentId(null);
       }
       return response.account;
-    } catch (err: any) {
-      const msg = err.message || 'Student ID login failed. Please check your ID code.';
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message ? err.message : 'Student ID login failed. Please check your ID code.';
       setAuthError(msg);
-      throw new Error(msg);
+      throw new Error(msg, { cause: err });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const signup = async (
-    email: string,
-    password: string,
-    role: 'parent' | 'teacher' = 'parent',
-    name?: string
-  ) => {
+  const signup = async (email: string, password: string, role: 'parent' | 'teacher' = 'parent', name?: string) => {
     setIsLoading(true);
     setAuthError(null);
     try {
@@ -185,10 +190,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setActiveStudentState(null);
         setStoredActiveStudentId(null);
       }
-    } catch (err: any) {
-      const msg = err.message || 'Signup failed. Please try a different email or password.';
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.message ? err.message : 'Signup failed. Please try a different email or password.';
       setAuthError(msg);
-      throw new Error(msg);
+      throw new Error(msg, { cause: err });
     } finally {
       setIsLoading(false);
     }
@@ -203,6 +209,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setStudents([]);
     setActiveStudentState(null);
     setAuthError(null);
+    setIsLoading(false);
   };
 
   const selectStudent = (student: Student) => {
@@ -214,7 +221,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     name: string,
     age: number,
     className: string,
-    currentTier: number = 1
+    currentTier: number = 1,
   ): Promise<Student> => {
     const created = await apiClient.createStudent({ name, age, className, currentTier });
     setStudents((prev) => [...prev, created]);
@@ -247,6 +254,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (updated.studentId) updateActiveStudentState({ name: updated.name, avatarUrl: updated.avatarUrl });
   };
 
+  // Changing the password bumps tokenVersion server-side, which invalidates
+  // every other session AND the caller's current token -- so the freshly
+  // issued token has to replace the stored one or this device is logged out
+  // on its next request.
+  const changePassword = async (currentPassword: string, newPassword: string): Promise<string> => {
+    const response = await apiClient.changePassword(currentPassword, newPassword);
+    setStoredToken(response.token);
+    setTokenState(response.token);
+    return response.message;
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -268,6 +286,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authError,
         clearAuthError: () => setAuthError(null),
         updateProfile,
+        changePassword,
       }}
     >
       {children}

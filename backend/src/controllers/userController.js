@@ -31,7 +31,6 @@ async function getMe(req, res) {
     avatarUrl: account.avatarUrl,
     role: account.role.toLowerCase(),
     approvedAt: account.approvedAt,
-    emailVerifiedAt: account.emailVerifiedAt,
     createdAt: account.createdAt,
   });
 }
@@ -54,7 +53,11 @@ async function updatePreferences(req, res) {
   if (allowedText.includes(req.body.textSize)) data.textSize = req.body.textSize;
   // Spelling is voice-only by design: there is no stored input-mode field and
   // a client asking for one is ignored (nothing to configure).
-  const preference = await prisma.accountPreference.upsert({ where: { accountId: req.user.id }, create: { accountId: req.user.id, ...data }, update: data });
+  const preference = await prisma.accountPreference.upsert({
+    where: { accountId: req.user.id },
+    create: { accountId: req.user.id, ...data },
+    update: data,
+  });
   return res.json(preference);
 }
 
@@ -66,13 +69,36 @@ async function updateProfile(req, res) {
   const avatarUrl = typeof req.body.avatarUrl === "string" ? req.body.avatarUrl : undefined;
   // Only raster image data URLs are accepted -- SVG (data:image/svg+xml) is
   // excluded so stored avatars can never carry script-bearing markup.
-  if (avatarUrl && (!/^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/.test(avatarUrl) || avatarUrl.length > 1_500_000)) return res.status(400).json({ error: "Choose a small image (PNG, JPG, GIF, WebP or AVIF) smaller than 1 MB" });
+  if (
+    avatarUrl &&
+    (!/^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/.test(avatarUrl) ||
+      avatarUrl.length > 1_500_000)
+  )
+    return res.status(400).json({ error: "Choose a small image (PNG, JPG, GIF, WebP or AVIF) smaller than 1 MB" });
   if (req.user.studentId) {
-    const student = await prisma.student.update({ where: { id: req.user.studentId }, data: { ...(name ? { name } : {}), ...(avatarUrl !== undefined ? { avatarUrl } : {}) } });
-    return res.json({ id: student.accountId, name: student.name, avatarUrl: student.avatarUrl, role: "student", studentId: student.id });
+    const student = await prisma.student.update({
+      where: { id: req.user.studentId },
+      data: { ...(name ? { name } : {}), ...(avatarUrl !== undefined ? { avatarUrl } : {}) },
+    });
+    return res.json({
+      id: student.accountId,
+      name: student.name,
+      avatarUrl: student.avatarUrl,
+      role: "student",
+      studentId: student.id,
+    });
   }
-  const account = await prisma.account.update({ where: { id: req.user.id }, data: { ...(name ? { name } : {}), ...(avatarUrl !== undefined ? { avatarUrl } : {}) } });
-  return res.json({ id: account.id, email: account.email, name: account.name, avatarUrl: account.avatarUrl, role: account.role.toLowerCase() });
+  const account = await prisma.account.update({
+    where: { id: req.user.id },
+    data: { ...(name ? { name } : {}), ...(avatarUrl !== undefined ? { avatarUrl } : {}) },
+  });
+  return res.json({
+    id: account.id,
+    email: account.email,
+    name: account.name,
+    avatarUrl: account.avatarUrl,
+    role: account.role.toLowerCase(),
+  });
 }
 
 module.exports = { getMe, getPreferences, updatePreferences, updateProfile };

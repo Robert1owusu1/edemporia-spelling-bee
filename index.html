@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0f172a" />
     <title>Spelling Bee</title>
+    <script>
+      // Apply the saved text size before first paint so the page never
+      // flashes the default size (mirrors SettingsContext's data-text-size).
+      try {
+        var size = localStorage.getItem('spelling_bee_text_size');
+        if (size) document.documentElement.setAttribute('data-text-size', size);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

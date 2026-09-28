@@ -8,26 +8,25 @@ class AudioFx {
   public init() {
     if (this.initialized) return;
     if (typeof window === 'undefined') return;
-    
+
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx = window.AudioContext ?? window.webkitAudioContext;
       if (AudioCtx) {
         this.ctx = new AudioCtx();
         this.initialized = true;
-        console.log('Audio context initialized successfully');
       }
-    } catch (error) {
-      console.warn('Failed to initialize audio context:', error);
+    } catch {
+      // Unsupported or blocked by the browser: effects stay silent, callers
+      // already check `isAvailable()` before relying on sound.
     }
   }
 
   private getContext(): AudioContext | null {
     // Don't auto-create - only use if already initialized
     if (!this.ctx || !this.initialized) {
-      console.warn('Audio context not initialized - call audioFx.init() after user interaction');
       return null;
     }
-    
+
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }

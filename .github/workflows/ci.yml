@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: spellingbee
+          POSTGRES_PASSWORD: spellingbee
+          POSTGRES_DB: spellingbee
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Lint (ESLint)
+        run: npm run lint
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Prisma resolves prisma.config.ts / the schema from the working
+      # directory, so --schema is passed explicitly here and the migration
+      # step below runs through the backend npm script (cwd = backend/).
+      - name: Validate Prisma schema
+        run: npx --prefix backend prisma validate --schema backend/prisma/schema.prisma
+
+      - name: Apply migrations
+        run: npm --prefix backend run prisma:deploy
+        env:
+          DATABASE_URL: postgresql://spellingbee:spellingbee@localhost:5432/spellingbee?schema=public
+
+      - name: Seed
+        run: npm --prefix backend run seed
+        env:
+          DATABASE_URL: postgresql://spellingbee:spellingbee@localhost:5432/spellingbee?schema=public
+
+      # test:e2e drives a live server over HTTP, so the API has to be up first.
+      - name: Start backend
+        run: |
+          npm --prefix backend start > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+        env:
+          NODE_ENV: development
+          DATABASE_URL: postgresql://spellingbee:spellingbee@localhost:5432/spellingbee?schema=public
+          JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnop
+          PLATFORM_ADMIN_EMAIL: admin@spellingbee.test
+          PLATFORM_ADMIN_PASSWORD: ci-platform-admin-password-2026
+
+      - name: Wait for backend health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:4000/health > /dev/null; then
+              echo "backend is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "backend did not become healthy"
+          cat /tmp/backend.log || true
+          exit 1
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://spellingbee:spellingbee@localhost:5432/spellingbee?schema=public
+          JWT_SECRET: ci-jwt-secret-0123456789abcdefghijklmnop
+          PLATFORM_ADMIN_EMAIL: admin@spellingbee.test
+          PLATFORM_ADMIN_PASSWORD: ci-platform-admin-password-2026
+
+      - name: Backend logs (on failure)
+        if: failure()
+        run: cat /tmp/backend.log || true

@@ -1,27 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Word } from '../api/types';
-import { speakWord, parseSpokenTranscript } from './VoiceSpellingParser';
+import { speakWord } from './VoiceSpellingParser';
 import BeeMascot from './BeeMascot';
 import { audioFx } from '../utils/audioEffects';
+import { scoreWord } from '../utils/scoring';
 import { useSettings } from '../context/SettingsContext';
-import {
-  Volume2,
-  Mic,
-  MicOff,
-  Sparkles,
-  CheckCircle2,
-  AlertCircle,
-  Flame,
-  Shield,
-  Lightbulb,
-  Zap,
-} from 'lucide-react';
+import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { Volume2, Mic, MicOff, Sparkles, CheckCircle2, AlertCircle, Flame, Shield, Lightbulb, Zap } from 'lucide-react';
 
 interface SpellingInteractionProps {
   word: Word;
   onSubmit: (spelledText: string, attempts: number) => void;
   isSubmitting?: boolean;
   comboStreak?: number;
+  /** Show the floating "+N XP" chip. Only the practice round awards word XP. */
+  showXp?: boolean;
 }
 
 export default function SpellingInteraction({
@@ -29,10 +22,23 @@ export default function SpellingInteraction({
   onSubmit,
   isSubmitting = false,
   comboStreak = 0,
+  showXp = true,
 }: SpellingInteractionProps) {
   const { speechVoice } = useSettings();
-  const [spokenRaw, setSpokenRaw] = useState('');
-  const [parsedLetters, setParsedLetters] = useState('');
+  // The recogniser itself (setup, interim transcript accumulation, listening
+  // and error flags) is a self-contained state machine: see the hook.
+  const {
+    spokenRaw,
+    parsedLetters,
+    setParsedLetters,
+    isListening,
+    recognitionSupported,
+    speechError,
+    toggleListening,
+    clearTranscript,
+  } = useSpeechRecognition(word);
+  // 1-based attempt number for the word currently on screen. The parent sends
+  // this value to the backend, so it must actually track each failed submit.
   const [attemptsCount, setAttemptsCount] = useState(1);
   const [speechRate, setSpeechRate] = useState<number>(0.85);
 
@@ -41,79 +47,38 @@ export default function SpellingInteraction({
   const [shieldActive, setShieldActive] = useState(false);
   const [floatingXp, setFloatingXp] = useState<string | null>(null);
 
-  // Speech Recognition state
-  const [isListening, setIsListening] = useState(false);
-  const [recognitionSupported, setRecognitionSupported] = useState(true);
-  const [speechError, setSpeechError] = useState<string | null>(null);
-
   // Hints toggles
   const [showDefinition, setShowDefinition] = useState(false);
   const [showExample, setShowExample] = useState(false);
 
-  const recognitionRef = useRef<any>(null);
+  const floatingXpTimerRef = useRef<number | null>(null);
+
+  // Auto-pronounce each new word. Kept apart from the reset effect below so
+  // its dependency list is exactly "what changes what is spoken": word, speed
+  // and voice — not the per-render `handlePlayAudio` closure, which would make
+  // the browser repeat the word on every re-render.
+  useEffect(() => {
+    audioFx.playClick();
+    speakWord(word.text, speechRate, speechVoice);
+  }, [word, speechRate, speechVoice]);
 
   useEffect(() => {
-    // Check SpeechRecognition support on mount
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setRecognitionSupported(false);
-    } else {
-      setRecognitionSupported(true);
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 3;
-        recognition.lang = navigator.language?.startsWith('en') ? navigator.language : 'en-US';
-
-        recognition.onresult = (event: any) => {
-          const result = event.results[event.results.length - 1];
-          const alternatives: string[] = Array.from(result as ArrayLike<{ transcript: string }>, (item) => item.transcript.trim());
-          const parsedAlternatives = alternatives.map(parseSpokenTranscript);
-          const fullTranscript = alternatives[0] || '';
-          setSpokenRaw(fullTranscript);
-          // Recognition often returns several valid readings. Prefer one that
-          // exactly matches the requested word, then use the best result.
-          const parsed = parsedAlternatives.find((value) => value === word.text.toLowerCase()) || parsedAlternatives[0] || '';
-          setParsedLetters(parsed);
-        };
-
-        recognition.onerror = (event: any) => {
-          setIsListening(false);
-          const message = event.error === 'not-allowed'
-            ? 'Microphone permission was blocked. Allow microphone access in your browser, then try again.'
-            : event.error === 'network'
-            ? 'Voice recognition needs an internet connection in this browser. Check your connection and use Chrome or Edge; your selected playback voice still works offline when installed on the device.'
-            : `Voice input issue: ${event.error}. Please try again.`;
-          setSpeechError(message);
-        };
-
-        recognition.onend = () => {
-          setIsListening(false);
-        };
-
-        recognitionRef.current = recognition;
-      } catch {
-        setRecognitionSupported(false);
-      }
-    }
-
-    // Auto pronounce word on load
-    handlePlayAudio(speechRate);
-
-    // Reset inputs for new word
-    setSpokenRaw('');
-    setParsedLetters('');
+    // Reset attempt counter and power-ups for the new word (transcript and
+    // speech errors are reset by the speech hook itself)
+    setAttemptsCount(1);
     setFirstLetterRevealed(false);
     setShieldActive(false);
+    setFloatingXp(null);
+    if (floatingXpTimerRef.current) {
+      clearTimeout(floatingXpTimerRef.current);
+      floatingXpTimerRef.current = null;
+    }
 
     return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch {}
+      // The floating XP chip must never outlive this component (or its word).
+      if (floatingXpTimerRef.current) {
+        clearTimeout(floatingXpTimerRef.current);
+        floatingXpTimerRef.current = null;
       }
     };
   }, [word]);
@@ -123,28 +88,15 @@ export default function SpellingInteraction({
     speakWord(word.text, rate, speechVoice);
   };
 
-  const toggleListening = () => {
+  // The click sound stays here; the hook only flips recogniser state.
+  const handleToggleListening = () => {
     audioFx.playClick();
-    setSpeechError(null);
-    if (!recognitionRef.current) return;
-
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (err: any) {
-        setSpeechError('Could not start microphone. Please check browser microphone permissions.');
-      }
-    }
+    toggleListening();
   };
 
   const handleClearVoice = () => {
     audioFx.playClick();
-    setSpokenRaw('');
-    setParsedLetters('');
+    clearTranscript();
   };
 
   // Power-up action: Reveal first letter
@@ -170,16 +122,23 @@ export default function SpellingInteraction({
     if (!finalSpelled.trim()) return;
 
     const isCorrect = finalSpelled.trim().toLowerCase() === word.text.toLowerCase();
-    if (isCorrect) {
-      if (comboStreak > 1) {
-        audioFx.playCombo(comboStreak);
-      } else {
-        audioFx.playCorrect();
-      }
-      setFloatingXp(`+${10 * Math.max(1, comboStreak)} XP!`);
-      setTimeout(() => setFloatingXp(null), 1800);
-    } else {
-      audioFx.playIncorrect();
+    // Answer sounds have exactly one owner: the parent page (it also owns the
+    // celebration timing), so playing them here would double every jingle.
+    if (isCorrect && showXp) {
+      // Same shared helper the parent uses to award the round's points, so the
+      // floating number always equals what the feedback card shows.
+      // The parent hands us the combo as it stands BEFORE this word (it only
+      // increments after submit), which is what the server scores on.
+      setFloatingXp(`+${scoreWord(word.tier, comboStreak, true)} XP!`);
+      if (floatingXpTimerRef.current) clearTimeout(floatingXpTimerRef.current);
+      floatingXpTimerRef.current = window.setTimeout(() => {
+        floatingXpTimerRef.current = null;
+        setFloatingXp(null);
+      }, 1800);
+    } else if (!isCorrect) {
+      // The word stays on screen after a wrong answer, so the next submit is
+      // attempt #2 — the parent reports this to the backend.
+      setAttemptsCount((prev) => prev + 1);
     }
 
     onSubmit(finalSpelled.trim(), attemptsCount);
@@ -218,11 +177,12 @@ export default function SpellingInteraction({
             {comboStreak >= 3
               ? `🔥 UNSTOPPABLE STREAK! ${comboStreak}x Multiplier Active!`
               : comboStreak === 2
-              ? `⚡ 2x Combo Bonus! Keep going!`
-              : `Buzz Bee: "Listen closely and spell out loud!"`}
+                ? `⚡ 2x Combo Bonus! Keep going!`
+                : `Buzz Bee: "Listen closely and spell out loud!"`}
           </p>
           <p className="text-[11px] text-slate-600 font-medium dark:text-slate-400">
-            Category: <strong className="text-slate-800 dark:text-slate-200">{word.category}</strong> • Tier Level {word.tier}
+            Category: <strong className="text-slate-800 dark:text-slate-200">{word.category}</strong> • Tier Level{' '}
+            {word.tier}
           </p>
         </div>
         {comboStreak > 1 && (
@@ -254,11 +214,12 @@ export default function SpellingInteraction({
                   setSpeechRate(0.85);
                   handlePlayAudio(0.85);
                 }}
+                aria-pressed={speechRate === 0.85}
                 className={`px-2 py-1 rounded-md transition-colors cursor-pointer ${
                   speechRate === 0.85 ? 'bg-amber-500 text-slate-950' : 'hover:bg-slate-100 dark:hover:bg-navy-700'
                 }`}
               >
-                1.0x Normal
+                0.85x Normal
               </button>
               <button
                 type="button"
@@ -266,6 +227,7 @@ export default function SpellingInteraction({
                   setSpeechRate(0.65);
                   handlePlayAudio(0.65);
                 }}
+                aria-pressed={speechRate === 0.65}
                 className={`px-2 py-1 rounded-md transition-colors cursor-pointer ${
                   speechRate === 0.65 ? 'bg-amber-500 text-slate-950' : 'hover:bg-slate-100 dark:hover:bg-navy-700'
                 }`}
@@ -282,6 +244,7 @@ export default function SpellingInteraction({
                 audioFx.playClick();
                 setShowDefinition((prev) => !prev);
               }}
+              aria-expanded={showDefinition}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer border ${
                 showDefinition
                   ? 'bg-slate-900 text-amber-400 border-slate-800 dark:bg-navy-700 dark:border-navy-700'
@@ -297,6 +260,7 @@ export default function SpellingInteraction({
                 audioFx.playClick();
                 setShowExample((prev) => !prev);
               }}
+              aria-expanded={showExample}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer border ${
                 showExample
                   ? 'bg-slate-900 text-amber-400 border-slate-800 dark:bg-navy-700 dark:border-navy-700'
@@ -330,7 +294,6 @@ export default function SpellingInteraction({
           </div>
         )}
       </div>
-
       {/* Gamified In-Game Power-Ups Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900 p-2.5 rounded-xl text-white dark:bg-navy-700">
         <span className="text-[11px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1">
@@ -369,17 +332,38 @@ export default function SpellingInteraction({
 
       {/* Voice Mode Area */}
       <div className="space-y-4 text-center">
+        {/* Single polite live region for the recogniser's state machine: the
+            start/stop of listening and every speech error are announced here
+            instead of being visible-only flashes. Errors are repeated below
+            with role="alert" so they are read out immediately. */}
+        <p role="status" className="sr-only">
+          {!recognitionSupported
+            ? 'Voice recognition is not supported in this browser.'
+            : isListening
+              ? 'Listening. Speak the letters aloud, one at a time.'
+              : speechError
+                ? ''
+                : 'Microphone off.'}
+        </p>
+
         {!recognitionSupported && (
-          <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-xs flex items-center gap-2 text-left dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-300">
+          <div
+            role="alert"
+            className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-xl text-xs flex items-center gap-2 text-left dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-300"
+          >
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              Web Speech Recognition is unsupported or disabled in this browser. Spelling uses voice input, so please try Chrome, Edge, or a supported browser.
+              Web Speech Recognition is unsupported or disabled in this browser. Spelling uses voice input, so please
+              try Chrome, Edge, or a supported browser.
             </span>
           </div>
         )}
 
         {speechError && (
-          <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-xl text-xs text-left dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300">
+          <div
+            role="alert"
+            className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-xl text-xs text-left dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300"
+          >
             {speechError}
           </div>
         )}
@@ -387,12 +371,12 @@ export default function SpellingInteraction({
         {/* Central Microphone Button */}
         <div className="py-3 flex flex-col items-center">
           <div className="relative">
-            {isListening && (
-              <div className="absolute -inset-3 rounded-full bg-rose-400/30 animate-ping" />
-            )}
+            {isListening && <div className="absolute -inset-3 rounded-full bg-rose-400/30 animate-ping" />}
             <button
               type="button"
-              onClick={toggleListening}
+              onClick={handleToggleListening}
+              aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
+              aria-pressed={isListening}
               className={`relative w-24 h-24 rounded-full flex flex-col items-center justify-center transition-all cursor-pointer shadow-md ${
                 isListening
                   ? 'bg-rose-600 text-white scale-105 shadow-rose-200'
@@ -448,14 +432,24 @@ export default function SpellingInteraction({
               </button>
             )}
           </div>
-          <p className="text-xs text-slate-600 dark:text-slate-400">Say the letters one at a time (for example, “C, A, T”). Your spoken letters appear below; submit them without typing.</p>
-          {spokenRaw ? <p className="rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-600 dark:bg-navy-900 dark:text-slate-400">Heard: “{spokenRaw}”</p> : null}
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            Say the letters one at a time (for example, “C, A, T”). Your spoken letters appear below; submit them
+            without typing.
+          </p>
+          {spokenRaw ? (
+            <p className="rounded-lg bg-slate-50 px-2 py-1.5 text-xs text-slate-600 dark:bg-navy-900 dark:text-slate-400">
+              Heard: “{spokenRaw}”
+            </p>
+          ) : null}
         </div>
       </div>
 
       {/* Letter Tiles Captured Preview */}
       <div className="pt-2">
-        <p className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider text-center mb-2 dark:text-slate-400">
+        <p
+          role="status"
+          className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider text-center mb-2 dark:text-slate-400"
+        >
           Captured Spelling ({activeLetters.length} / {word.text.length} letters):
         </p>
 

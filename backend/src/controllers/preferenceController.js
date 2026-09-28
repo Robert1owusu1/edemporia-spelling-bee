@@ -11,7 +11,11 @@ async function updatePreferences(req, res) {
   if (allowedText.includes(req.body.textSize)) data.textSize = req.body.textSize;
   // Spelling is voice-only by design: there is no stored input-mode field and a
   // client asking for one is ignored (nothing to configure).
-  const preference = await prisma.studentPreference.upsert({ where: { studentId: req.student.id }, create: { studentId: req.student.id, ...data }, update: data });
+  const preference = await prisma.studentPreference.upsert({
+    where: { studentId: req.student.id },
+    create: { studentId: req.student.id, ...data },
+    update: data,
+  });
   return res.json(preference);
 }
 module.exports = { getPreferences, updatePreferences };

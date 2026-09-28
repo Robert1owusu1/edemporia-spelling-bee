@@ -3,11 +3,16 @@ const { audit } = require("../services/auditService");
 
 async function listClassrooms(req, res) {
   const where = req.user.role === "ADMIN" ? {} : { teacherId: req.user.id };
-  const classrooms = await prisma.classroom.findMany({ where, include: { teacher: { select: { name: true, email: true } }, _count: { select: { students: true } } }, orderBy: { createdAt: "desc" } });
+  const classrooms = await prisma.classroom.findMany({
+    where,
+    include: { teacher: { select: { name: true, email: true } }, _count: { select: { students: true } } },
+    orderBy: { createdAt: "desc" },
+  });
   return res.json(classrooms.map(({ _count, ...classroom }) => ({ ...classroom, studentCount: _count.students })));
 }
 async function createClassroom(req, res) {
-  const name = String(req.body.name || "").trim(); const grade = String(req.body.grade || "").trim() || null;
+  const name = String(req.body.name || "").trim();
+  const grade = String(req.body.grade || "").trim() || null;
   if (!name) return res.status(400).json({ error: "Classroom name is required" });
   // Classrooms are provisioned by the school administrator. An optional
   // teacherId assigns a teacher to the class.
@@ -24,7 +29,8 @@ async function createClassroom(req, res) {
 async function updateClassroom(req, res) {
   const existing = await prisma.classroom.findUnique({ where: { id: req.params.id } });
   if (!existing) return res.status(404).json({ error: "Classroom not found" });
-  if (req.user.role !== "ADMIN" && existing.teacherId !== req.user.id) return res.status(403).json({ error: "Not authorized to edit this classroom" });
+  if (req.user.role !== "ADMIN" && existing.teacherId !== req.user.id)
+    return res.status(403).json({ error: "Not authorized to edit this classroom" });
 
   const data = {};
   if (typeof req.body.name === "string" && req.body.name.trim()) data.name = req.body.name.trim();
@@ -39,17 +45,38 @@ async function updateClassroom(req, res) {
   }
   if (!Object.keys(data).length) return res.status(400).json({ error: "No valid fields to update" });
 
-  const classroom = await prisma.classroom.update({ where: { id: existing.id }, data });
+  const classroom = await prisma.$transaction(async (tx) => {
+    const updated = await tx.classroom.update({ where: { id: existing.id }, data });
+    // Student.className is denormalised from the classroom it is attached to
+    // (see assignStudent) -- keep every enrolled learner's copy in sync in the
+    // SAME transaction, or a rename silently desyncs the two.
+    if (data.name !== undefined || data.grade !== undefined) {
+      const name = data.name !== undefined ? data.name : existing.name;
+      const grade = data.grade !== undefined ? data.grade : existing.grade;
+      const className = grade ? `${name} · ${grade}` : name;
+      await tx.student.updateMany({ where: { classroomId: updated.id }, data: { className } });
+    }
+    return updated;
+  });
   await audit(req.user.id, "classroom.updated", classroom.id, data);
   return res.json(classroom);
 }
 async function assignStudent(req, res) {
-  const classroom = await prisma.classroom.findFirst({ where: req.user.role === "ADMIN" ? { id: req.params.id } : { id: req.params.id, teacherId: req.user.id } });
+  const classroom = await prisma.classroom.findFirst({
+    where: req.user.role === "ADMIN" ? { id: req.params.id } : { id: req.params.id, teacherId: req.user.id },
+  });
   const student = await prisma.student.findUnique({ where: { id: req.body.studentId } });
   if (!classroom) return res.status(404).json({ error: "Classroom not found" });
   if (!student) return res.status(404).json({ error: "Student not found" });
-  if (req.user.role !== "ADMIN" && student.accountId !== req.user.id && student.classroomId !== classroom.id) return res.status(403).json({ error: "A parent must enrol this learner using the classroom name" });
-  const updated = await prisma.student.update({ where: { id: student.id }, data: { classroomId: classroom.id, className: classroom.grade ? `${classroom.name} · ${classroom.grade}` : classroom.name } });
+  if (req.user.role !== "ADMIN" && student.accountId !== req.user.id && student.classroomId !== classroom.id)
+    return res.status(403).json({ error: "A parent must enrol this learner using the classroom name" });
+  const updated = await prisma.student.update({
+    where: { id: student.id },
+    data: {
+      classroomId: classroom.id,
+      className: classroom.grade ? `${classroom.name} · ${classroom.grade}` : classroom.name,
+    },
+  });
   await audit(req.user.id, "classroom.student_assigned", classroom.id, { studentId: student.id });
   return res.json(updated);
 }

@@ -1,0 +1,14 @@
+{
+  "semi": true,
+  "singleQuote": true,
+  "printWidth": 120,
+  "tabWidth": 2,
+  "overrides": [
+    {
+      "files": ["backend/**/*.js", "backend/**/*.cjs", "backend/**/*.ts"],
+      "options": {
+        "singleQuote": false
+      }
+    }
+  ]
+}

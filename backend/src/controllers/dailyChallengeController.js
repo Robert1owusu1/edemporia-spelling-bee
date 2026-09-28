@@ -1,56 +1,68 @@
 const prisma = require("../db/prismaClient");
 const { evaluateBadgesForStudent } = require("./badgeController");
-
-function startOfToday() {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return today;
-}
-
-function wordOfTheDay(words) {
-  const seed = [...startOfToday().toISOString().slice(0, 10)].reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return words[seed % words.length];
-}
+const {
+  computeHearts,
+  nextDailyStreak,
+  utcDayKey,
+  MAX_STUDENT_POINTS,
+  MAX_STUDENT_STREAK,
+} = require("../services/studentStateService");
 
 // The daily word always comes from the shared school word bank -- the same
 // single-school words for every learner.
-async function dailyWordPool() {
-  return prisma.word.findMany();
+// Deterministic "word of the day": the pure-UTC day key is the seed and the
+// pool order is `id ASC`, so every server (and every restart) picks the same
+// word for a given day. The choice is cached briefly so the endpoint does not
+// scan the word bank on every request.
+const DAILY_POOL_TTL_MS = 60 * 1000;
+let wordOfTheDayCache = { day: null, at: 0, word: null };
+
+async function wordOfTheDay() {
+  const day = utcDayKey();
+  const now = Date.now();
+  if (wordOfTheDayCache.word && wordOfTheDayCache.day === day && now - wordOfTheDayCache.at < DAILY_POOL_TTL_MS) {
+    return wordOfTheDayCache.word;
+  }
+  const count = await prisma.word.count();
+  if (!count) {
+    wordOfTheDayCache = { day, at: now, word: null };
+    return null;
+  }
+  const seed = [...day].reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const [word] = await prisma.word.findMany({ orderBy: { id: "asc" }, skip: seed % count, take: 1 });
+  wordOfTheDayCache = { day, at: now, word: word || null };
+  return wordOfTheDayCache.word;
 }
 
 // Matches the client's comparison so the screen and the ledger agree.
-const normalizeSpelling = (value) => String(value || "").trim().toLowerCase();
+const normalizeSpelling = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
 
 // The advertised daily-challenge reward. Spelled correctly, the learner
-// pockets these bonus points and extends their streak fire by a day on top
-// of the round they play afterwards.
+// pockets these bonus points on top of the round they play afterwards.
 const DAILY_CHALLENGE_BONUS_POINTS = 50;
 
-// GET /daily-challenge?studentId=...
-// Deterministic "word of the day" -- same word for everyone, picked by
-// date so it doesn't need a cron job or extra table to manage.
-// When a studentId is provided (and owned by the caller), also reports
-// whether that learner has already completed today's challenge.
+// GET /daily-challenge[?studentId=...]
+// The route runs requireOwnStudent whenever a learner is named -- either via
+// ?studentId= or for a student session that omits the query parameter -- and
+// attaches them as req.student. Without a learner this is just "word of the
+// day" for everyone.
 async function getDailyChallenge(req, res) {
-  const studentId = req.query.studentId;
-  const student = studentId ? await prisma.student.findUnique({ where: { id: studentId } }) : null;
-  const words = await dailyWordPool();
-  if (words.length === 0) {
+  const student = req.student || null;
+  const word = await wordOfTheDay();
+  if (!word) {
     return res.status(404).json({ error: "No words available yet" });
   }
 
-  const word = wordOfTheDay(words);
-  const today = startOfToday();
-  const payload = { date: today.toISOString().slice(0, 10), word };
+  const day = utcDayKey();
+  const payload = { date: day, word };
 
-  if (studentId) {
-    const teacherOwnsClass = student?.classroomId && req.user.role === "TEACHER"
-      ? await prisma.classroom.count({ where: { id: student.classroomId, teacherId: req.user.id } }) > 0
-      : false;
-    if (!student || !(req.user.role === "ADMIN" || req.user.studentId === student.id || student.accountId === req.user.id || teacherOwnsClass)) {
-      return res.status(403).json({ error: "Not authorized for this student profile" });
-    }
-    const completion = await prisma.dailyChallengeCompletion.findUnique({ where: { studentId_date: { studentId: student.id, date: today } } });
+  if (student) {
+    const completion = await prisma.dailyChallengeCompletion.findUnique({
+      where: { studentId_date: { studentId: student.id, date: day } },
+    });
     payload.completedToday = Boolean(completion);
     payload.correctToday = completion ? completion.correct : undefined;
   } else {
@@ -63,28 +75,64 @@ async function getDailyChallenge(req, res) {
 // POST /daily-challenge/complete -- Body: { studentId, wordId, spelling }
 // requireOwnStudent has verified the student belongs to this account.
 // Records the day (once per learner per day), writes the Progress row and,
-// when correct, grants the advertised +50 bonus points and +1 streak day in
-// a single transaction so a mid-request failure can't half-apply a reward.
+// when correct, grants the advertised +50 bonus points in a single
+// transaction so a mid-request failure can't half-apply a reward.
 // Correctness is graded here from the student's spelling -- the client only
 // reports what the learner typed, it can't declare itself correct.
+// The daily challenge advances `dailyStreak` (consecutive practice days) --
+// it never touches the round combo (`streak`) and it is never blocked by
+// hearts.
 async function completeDailyChallenge(req, res) {
   const student = await prisma.student.findUnique({ where: { id: req.student.id } });
-  const words = await dailyWordPool();
-  if (!words.length) return res.status(404).json({ error: "No words available yet" });
-  const today = startOfToday();
-  const word = wordOfTheDay(words);
+  const word = await wordOfTheDay();
+  if (!word) return res.status(404).json({ error: "No words available yet" });
+  const day = utcDayKey();
   if (req.body.wordId !== word.id || typeof req.body.spelling !== "string" || !req.body.spelling.trim()) {
     return res.status(400).json({ error: "Invalid daily challenge completion" });
   }
   const isCorrect = normalizeSpelling(req.body.spelling) === normalizeSpelling(word.text);
+  const now = Date.now();
   let completion;
+  let pointsAwarded = 0;
   try {
     completion = await prisma.$transaction(async (tx) => {
-      const created = await tx.dailyChallengeCompletion.create({ data: { studentId: student.id, date: today, wordId: word.id, correct: isCorrect } });
-      await tx.progress.create({ data: { studentId: student.id, wordId: word.id, correct: isCorrect, attempts: 1 } });
-      if (isCorrect) {
-        await tx.student.update({ where: { id: student.id }, data: { points: { increment: DAILY_CHALLENGE_BONUS_POINTS }, streak: { increment: 1 }, lastActiveAt: new Date() } });
+      // Lock the learner so concurrent rounds/dailies can't double-spend the
+      // point cap or the daily-streak bookkeeping.
+      const lockedStudent = await tx.$queryRaw`
+        SELECT points, streak, hearts, "dailyStreak", "lastPracticeDay",
+               (EXTRACT(EPOCH FROM "heartsUpdatedAt") * 1000.0)::double precision AS "heartsUpdatedAtMs"
+        FROM "Student" WHERE id = ${student.id} FOR UPDATE`;
+      const fresh = lockedStudent[0];
+      if (!fresh) {
+        const error = new Error("Student not found");
+        error.statusCode = 404;
+        throw error;
       }
+
+      const daily = nextDailyStreak(fresh, day);
+      const regen = computeHearts({ hearts: fresh.hearts, heartsUpdatedAt: fresh.heartsUpdatedAtMs }, now);
+      const studentData = {
+        hearts: regen.hearts,
+        heartsUpdatedAt: regen.heartsUpdatedAt,
+        dailyStreak: daily.dailyStreak,
+        lastPracticeDay: daily.lastPracticeDay,
+        lastActiveAt: new Date(now),
+      };
+      if (isCorrect) {
+        const before = Number(fresh.points);
+        const after = Math.min(before + DAILY_CHALLENGE_BONUS_POINTS, MAX_STUDENT_POINTS);
+        pointsAwarded = Math.max(0, after - before);
+        studentData.points = after;
+        // The combo is not part of the daily challenge; the cap is applied
+        // defensively so the same ceilings hold on every write path.
+        studentData.streak = Math.min(Number(fresh.streak), MAX_STUDENT_STREAK);
+      }
+
+      const created = await tx.dailyChallengeCompletion.create({
+        data: { studentId: student.id, date: day, wordId: word.id, correct: isCorrect },
+      });
+      await tx.progress.create({ data: { studentId: student.id, wordId: word.id, correct: isCorrect, attempts: 1 } });
+      await tx.student.update({ where: { id: student.id }, data: studentData });
       return created;
     });
   } catch (error) {
@@ -94,16 +142,24 @@ async function completeDailyChallenge(req, res) {
     if (error && error.code === "P2002") {
       return res.status(409).json({ error: "Today's challenge has already been completed" });
     }
+    if (error && error.statusCode) return res.status(error.statusCode).json({ error: error.message });
     throw error;
   }
   const earnedBadges = await evaluateBadgesForStudent(student.id);
-  const updated = await prisma.student.findUnique({ where: { id: student.id }, select: { points: true, streak: true, hearts: true, currentTier: true } });
+  const updated = await prisma.student.findUnique({
+    where: { id: student.id },
+    select: { points: true, streak: true, hearts: true, currentTier: true, dailyStreak: true },
+  });
   return res.status(201).json({
     ...completion,
     correct: completion.correct,
-    pointsAwarded: completion.correct ? DAILY_CHALLENGE_BONUS_POINTS : 0,
-    streakDays: updated.streak,
+    pointsAwarded, // real delta after the MAX_STUDENT_POINTS cap
+    streak: updated.streak, // round combo -- unchanged by the daily challenge
+    streakDays: updated.dailyStreak, // alias of dailyStreak
+    dailyStreak: updated.dailyStreak,
+    hearts: updated.hearts,
     heartsRemaining: updated.hearts,
+    points: updated.points,
     totalPoints: updated.points,
     currentTier: updated.currentTier,
     earnedBadge: earnedBadges[0] || undefined,

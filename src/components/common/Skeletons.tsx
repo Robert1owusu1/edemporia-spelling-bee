@@ -1,5 +1,3 @@
-import React from 'react';
-
 // Skeleton for Learner Profile List
 export function ProfileListSkeleton() {
   return (

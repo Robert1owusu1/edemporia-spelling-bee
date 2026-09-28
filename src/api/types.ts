@@ -28,13 +28,18 @@ export interface Student {
   className: string;
   currentTier: number;
   hearts: number;
+  // `streak` is the round combo (resets on a wrong word, max 50) while
+  // `dailyStreak` counts consecutive practice days. `streakDays` and
+  // `heartsRemaining` are aliases the backend keeps for older payloads.
   streak: number;
+  dailyStreak?: number;
+  streakDays?: number;
   points: number;
   avatarColor?: string;
   avatarUrl?: string;
   isIndependent?: boolean; // True if age >= 15
   supervisorAccountId?: string;
-  
+
   // Monitoring Statistics for Teachers & Parents
   lastActiveAt?: string;
   isLoggedInToday?: boolean;
@@ -60,6 +65,54 @@ export interface Word {
   exampleSentence: string;
 }
 
+/** One word's outcome, as produced by the game loop and shown on results. */
+export interface WordFeedback {
+  word: Word;
+  isCorrect: boolean;
+  userSpelling: string;
+  attempts: number;
+  combo: number;
+  xpEarned: number;
+}
+
+/**
+ * The `location.state` contract for /round-result. GameLoopPage is the only
+ * writer; typing it here means a refresh/deep-link (state === null) can be
+ * told apart from a real round without `any`.
+ */
+export interface RoundResultState {
+  tier?: number;
+  score?: number;
+  totalWords?: number;
+  pointsEarned?: number;
+  streakDays?: number;
+  heartsRemaining?: number;
+  tierAdvanced?: boolean;
+  earnedBadges?: Badge[];
+  totalSpentSeconds?: number;
+  results?: WordFeedback[];
+  syncError?: boolean;
+}
+
+/** One word as posted to POST /admin/words/import-csv. */
+export interface CsvImportWord {
+  text: string;
+  tier: number;
+  category?: string;
+}
+
+/** Response body of POST /admin/words/import-csv (mirrors adminWordController). */
+export interface CsvImportResponse {
+  message: string;
+  total: number;
+  results: {
+    /** Full rows of the words the database actually created. */
+    successful: Word[];
+    failed: Array<{ row: number; data: CsvImportWord; error: string }>;
+    skipped: Array<{ row: number; data: CsvImportWord; reason: string }>;
+  };
+}
+
 export interface SubmitRoundDto {
   studentId?: string;
   wordId?: string;
@@ -80,6 +133,7 @@ export interface RoundResultResponse {
   pointsEarned?: number;
   totalPoints?: number;
   streakDays?: number;
+  dailyStreak?: number;
   heartsRemaining?: number;
   currentTier?: number;
   tierAdvanced?: boolean;
@@ -104,6 +158,7 @@ export interface DailyChallengeResult {
   correct: boolean;
   pointsAwarded?: number;
   streakDays?: number;
+  dailyStreak?: number;
   heartsRemaining?: number;
   totalPoints?: number;
   currentTier?: number;
@@ -126,7 +181,10 @@ export interface LeaderboardEntry {
   name: string;
   tier?: number;
   points: number;
+  // Days-long streak shown on rank cards. Older payloads only carry `streak`.
   streak: number;
+  dailyStreak?: number;
+  streakDays?: number;
   className?: string;
 }
 
@@ -147,7 +205,8 @@ export interface AdminAccount {
   name?: string | null;
   role: 'parent' | 'teacher' | 'admin';
   approvedAt?: string | null;
-  emailVerifiedAt?: string | null;
+  /** Set while an in-app forgot-password request is waiting for the admin. */
+  passwordResetRequestedAt?: string | null;
   createdAt?: string;
   studentCount: number;
   classrooms?: Array<{ id: string; name: string; grade?: string | null }>;

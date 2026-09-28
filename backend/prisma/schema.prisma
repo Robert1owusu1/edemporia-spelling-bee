@@ -21,11 +21,11 @@ model Account {
   email        String      @unique
   name         String?
   avatarUrl    String?
-  emailVerifiedAt DateTime?
-  verificationTokenHash String?
-  verificationExpiresAt DateTime?
-  passwordResetTokenHash String?
-  passwordResetExpiresAt DateTime?
+  // In-app "forgot password" request: set when the account holder asks for a
+  // reset, shown as a badge in the admin portal, cleared when an administrator
+  // sets a new (default) password. No email is ever sent -- admin-created
+  // accounts are recovered by the administrator directly.
+  passwordResetRequestedAt DateTime?
   passwordHash String
   role         AccountRole @default(PARENT)
   approvedAt   DateTime?
@@ -52,8 +52,17 @@ model Student {
   className       String
   currentTier     Int      @default(1)
   hearts          Int      @default(5)
+  // Last time a heart was lost/regenerated. Hearts refill lazily at 1 per
+  // 15 minutes measured from this stamp (see services/studentStateService).
   heartsUpdatedAt DateTime @default(now())
+  // Round combo: +1 per correct word, reset to 0 on a wrong word, capped at 50.
   streak          Int      @default(0)
+  // Consecutive UTC practice days: +1 per new practice day, unchanged on the
+  // same day, reset to 1 after a gap. Independent of the round combo.
+  dailyStreak     Int      @default(0)
+  lastPracticeDay String?  // YYYY-MM-DD (UTC) of the last scored activity
+  // Placement quiz is one-time: once completed the endpoint returns 409.
+  placementCompleted Boolean @default(false)
   points          Int      @default(0)
   avatarColor     String?
   avatarUrl       String?
@@ -61,7 +70,10 @@ model Student {
   classroomId     String?
   createdAt       DateTime @default(now())
 
-  account  Account        @relation(fields: [accountId], references: [id])
+  // Account -> Student is deliberately RESTRICT: learners must be deleted
+  // explicitly (admin account deletion / deleteStudent), never as a side
+  // effect of removing an account row.
+  account  Account        @relation(fields: [accountId], references: [id], onDelete: Restrict)
   classroom Classroom?    @relation(fields: [classroomId], references: [id])
   progress Progress[]
   badges   StudentBadge[]
@@ -77,7 +89,7 @@ model Student {
 
 model Word {
   id              String   @id @default(uuid())
-  text            String
+  text            String // normalised to lower case on every write path
   tier            Int // difficulty tier -- the only progression axis for now
   category        String? // optional topic tag (e.g. "Animals", "Science")
   definition      String
@@ -85,9 +97,11 @@ model Word {
   createdAt       DateTime @default(now())
 
   progress Progress[]
+  dailyChallenges DailyChallengeCompletion[]
 
   @@index([tier])
   @@index([text])
+  @@unique([text])
 }
 
 model Progress {
@@ -98,8 +112,11 @@ model Progress {
   attempts  Int      @default(1)
   createdAt DateTime @default(now())
 
-  student Student @relation(fields: [studentId], references: [id])
-  word    Word    @relation(fields: [wordId], references: [id])
+  // Student children cascade so deleting a learner keeps its history together.
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Word -> Progress is deliberately RESTRICT: learner history must never be
+  // destroyed by deleting content (deleteWord refuses used words instead).
+  word    Word    @relation(fields: [wordId], references: [id], onDelete: Restrict)
 
   @@index([studentId])
   @@index([wordId])
@@ -107,7 +124,7 @@ model Progress {
 
 model Badge {
   id          String @id @default(uuid())
-  name        String
+  name        String @unique
   description String
   criteria    String // simple machine-readable rule, e.g. "streak:7"
 
@@ -120,7 +137,7 @@ model StudentBadge {
   badgeId   String
   earnedAt  DateTime @default(now())
 
-  student Student @relation(fields: [studentId], references: [id])
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
   badge   Badge   @relation(fields: [badgeId], references: [id])
 
   @@unique([studentId, badgeId])
@@ -164,12 +181,13 @@ model AccountPreference {
 model DailyChallengeCompletion {
   id        String   @id @default(uuid())
   studentId String
-  date      DateTime
-  wordId    String
+  date      String   // pure UTC calendar day, YYYY-MM-DD (also the uniqueness key)
+  wordId    String?  // optional: the word may be removed later (SET NULL)
   correct   Boolean
   createdAt DateTime @default(now())
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  word    Word?   @relation(fields: [wordId], references: [id], onDelete: SetNull)
 
   @@unique([studentId, date])
   @@index([wordId])

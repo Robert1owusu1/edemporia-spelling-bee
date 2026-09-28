@@ -14,15 +14,19 @@ async function requireOwnStudent(req, res, next) {
   }
 
   const student = await prisma.student.findUnique({ where: { id: studentId } });
-  const teacherOwnsClass = student?.classroomId && req.user.role === "TEACHER"
-    ? await prisma.classroom.count({ where: { id: student.classroomId, teacherId: req.user.id } }) > 0
-    : false;
+  const teacherOwnsClass =
+    student?.classroomId && req.user.role === "TEACHER"
+      ? (await prisma.classroom.count({ where: { id: student.classroomId, teacherId: req.user.id } })) > 0
+      : false;
   // A student-code session may ONLY act on its own profile. Its req.user.id is
   // the parent/teacher account behind the learner, so the `accountId` check
   // must be skipped for student sessions -- otherwise a learner could submit
   // rounds or read progress as a sibling sharing the same account.
   const ownsAccount = !req.user.studentId && student?.accountId === req.user.id;
-  if (!student || !(req.user.role === "ADMIN" || req.user.studentId === student.id || ownsAccount || teacherOwnsClass)) {
+  if (
+    !student ||
+    !(req.user.role === "ADMIN" || req.user.studentId === student.id || ownsAccount || teacherOwnsClass)
+  ) {
     return res.status(403).json({ error: "Not authorized for this student profile" });
   }
 

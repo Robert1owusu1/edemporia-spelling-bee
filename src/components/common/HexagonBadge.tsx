@@ -45,14 +45,20 @@ export default function HexagonBadge({
       : 'bg-slate-100 text-slate-400 border-slate-200 dark:bg-navy-700 dark:text-slate-500 dark:border-navy-700',
   };
 
-  return (
-    <div
-      onClick={onClick}
-      className={`relative inline-flex items-center justify-center rounded-2xl border-2 font-black transition-all ${
-        sizeClasses[size]
-      } ${colorStyles[color]} ${onClick ? 'cursor-pointer hover:scale-105 active:scale-95' : ''} ${className}`}
-    >
-      {children}
-    </div>
-  );
+  // Clickable badges (badge grid, trail nodes) become real buttons so they are
+  // reachable by keyboard and announced as controls; inactive badges stay plain
+  // divs, because a non-interactive element must not be focusable.
+  const shape = `relative inline-flex items-center justify-center rounded-2xl border-2 font-black transition-all text-left ${
+    sizeClasses[size]
+  } ${colorStyles[color]} ${onClick ? 'cursor-pointer hover:scale-105 active:scale-95' : ''} ${className}`;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={shape}>
+        {children}
+      </button>
+    );
+  }
+
+  return <div className={shape}>{children}</div>;
 }

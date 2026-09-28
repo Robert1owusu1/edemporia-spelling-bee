@@ -1,25 +1,24 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SettingsProvider } from './context/SettingsContext';
-import { lazy, Suspense, useEffect, useCallback } from 'react';
-import { audioFx } from './utils/audioEffects';
-
-// Preload route chunks on hover/focus for faster navigation
-const preloadRoute = (importFn: () => Promise<any>) => {
-  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-    requestIdleCallback(() => importFn());
-  } else {
-    setTimeout(() => importFn(), 0);
-  }
-};
+import { lazy, Suspense } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
+import { useAudioInit } from './hooks/useAudioInit';
 
 // Route-level code splitting: each page (and its heavy dependencies such as
 // recharts) is only downloaded when the user actually navigates to it, which
 // keeps the initial load on slow phone networks small.
+
+// Public entry & account pages
 const HeroLandingPage = lazy(() => import('./pages/HeroLandingPage'));
 const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const SignupPage = lazy(() => import('./pages/SignupPage'));
+const AccountRecoveryPage = lazy(() => import('./pages/AccountRecoveryPage'));
+const TermsPage = lazy(() => import('./pages/TermsPage'));
+const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
+
+// Authenticated learning pages
 const HomeDashboardPage = lazy(() => import('./pages/HomeDashboardPage'));
 const ProfilePickerPage = lazy(() => import('./pages/ProfilePickerPage'));
 const PlacementQuizPage = lazy(() => import('./pages/PlacementQuizPage'));
@@ -29,19 +28,21 @@ const RoundResultPage = lazy(() => import('./pages/RoundResultPage'));
 const DailyChallengePage = lazy(() => import('./pages/DailyChallengePage'));
 const LeaderboardPage = lazy(() => import('./pages/LeaderboardPage'));
 const BadgesPage = lazy(() => import('./pages/BadgesPage'));
-const SupervisorDashboardPage = lazy(() => import('./pages/SupervisorDashboardPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const AccountRecoveryPage = lazy(() => import('./pages/AccountRecoveryPage'));
-const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage'));
+
+// Supervisor portal
+const SupervisorDashboardPage = lazy(() => import('./pages/SupervisorDashboardPage'));
+
+// Admin section (layout + its nested pages)
 const AdminLayout = lazy(() => import('./components/admin/AdminLayout'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
 const AdminAccountsPage = lazy(() => import('./pages/admin/AdminAccountsPage'));
 const AdminClassesPage = lazy(() => import('./pages/admin/AdminClassesPage'));
 const WordBankAdminPage = lazy(() => import('./pages/admin/WordBankAdminPage'));
 const LeaderboardAdminPage = lazy(() => import('./pages/admin/LeaderboardAdminPage'));
+
+// Shared route guard, lazy so it never lands in the entry bundle
 const ProtectedRoute = lazy(() => import('./components/auth/ProtectedRoute'));
-const TermsPage = lazy(() => import('./pages/TermsPage'));
-const PrivacyPage = lazy(() => import('./pages/PrivacyPage'));
 
 // Better Suspense fallback with loading indicator
 function RouteFallback() {
@@ -59,159 +60,155 @@ function RouteFallback() {
 }
 
 export default function App() {
-  // Initialize audio on first user interaction
-  useEffect(() => {
-    const initAudioOnInteraction = () => {
-      audioFx.init();
-      // Optional: Play a subtle click to confirm audio works
-      if (audioFx.isAvailable()) {
-        console.log('🎵 Audio initialized successfully');
-        // Remove listener after first successful init
-        document.removeEventListener('click', initAudioOnInteraction);
-        document.removeEventListener('touchstart', initAudioOnInteraction);
-        document.removeEventListener('keydown', initAudioOnInteraction);
-      }
-    };
-
-    // Listen for any user interaction
-    document.addEventListener('click', initAudioOnInteraction);
-    document.addEventListener('touchstart', initAudioOnInteraction);
-    document.addEventListener('keydown', initAudioOnInteraction);
-
-    return () => {
-      document.removeEventListener('click', initAudioOnInteraction);
-      document.removeEventListener('touchstart', initAudioOnInteraction);
-      document.removeEventListener('keydown', initAudioOnInteraction);
-    };
-  }, []);
+  // Initialize audio on first user interaction (shared listener, see the hook)
+  useAudioInit();
 
   return (
     <AuthProvider>
       <SettingsProvider>
         <BrowserRouter>
-          <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            {/* Public Entry Points */}
-            <Route path="/" element={<HeroLandingPage />} />
-            <Route path="/onboarding" element={<OnboardingPage />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<SignupPage />} />
-            <Route path="/terms" element={<TermsPage />} />
-            <Route path="/privacy" element={<PrivacyPage />} />
-            <Route path="/reset-password" element={<AccountRecoveryPage />} />
-            <Route path="/verify-email" element={<VerifyEmailPage />} />
-
-            {/* Authenticated Learning Routes */}
-            <Route
-              path="/home"
-              element={
-                <ProtectedRoute>
-                  <HomeDashboardPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/profiles"
-              element={
-                <ProtectedRoute>
-                  <ProfilePickerPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/placement-quiz"
-              element={
-                <ProtectedRoute>
-                  <PlacementQuizPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/trail"
-              element={
-                <ProtectedRoute>
-                  <TrailMapPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/game"
-              element={
-                <ProtectedRoute>
-                  <GameLoopPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/round-result"
-              element={
-                <ProtectedRoute>
-                  <RoundResultPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/daily-challenge"
-              element={
-                <ProtectedRoute>
-                  <DailyChallengePage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/leaderboard"
-              element={
-                <ProtectedRoute>
-                  <LeaderboardPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/badges"
-              element={
-                <ProtectedRoute>
-                  <BadgesPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/supervisor"
-              element={
-                <ProtectedRoute requireSupervisor>
-                  <SupervisorDashboardPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <SettingsPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="/learning-hub" element={<Navigate to="/supervisor" replace />} />
-            <Route path="/teacher-hub" element={<Navigate to="/supervisor" replace />} />
-            <Route path="/challenges" element={<Navigate to="/supervisor" replace />} />
-
-            <Route
-              path="/admin"
-              element={
-              <ProtectedRoute roles={['admin']}>
-                <AdminLayout />
-                </ProtectedRoute>
-              }
+          <ErrorBoundary>
+            {/* First focusable element on every route: lets keyboard and
+                screen-reader users jump past the navbar straight to the page
+                content. Each page's <main> carries the matching id. */}
+            <a
+              href="#main-content"
+              className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-xl focus:bg-slate-900 focus:px-4 focus:py-2 focus:text-sm focus:font-bold focus:text-amber-400 focus:shadow-lg"
             >
-              <Route index element={<AdminOverviewPage />} />
-              <Route path="accounts" element={<AdminAccountsPage />} />
-              <Route path="classes" element={<AdminClassesPage />} />
-              <Route path="words" element={<WordBankAdminPage />} />
-              <Route path="leaderboard" element={<LeaderboardAdminPage />} />
-            </Route>
+              Skip to main content
+            </a>
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
+                {/* Public Entry Points */}
+                <Route path="/" element={<HeroLandingPage />} />
+                <Route path="/onboarding" element={<OnboardingPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/signup" element={<SignupPage />} />
+                <Route path="/terms" element={<TermsPage />} />
+                <Route path="/privacy" element={<PrivacyPage />} />
+                <Route path="/reset-password" element={<AccountRecoveryPage />} />
+                {/* Email verification was removed with the emailed reset
+                    links: accounts are admin-created. Old bookmarks land on
+                    the in-app password request instead of the 404 catch-all. */}
+                <Route path="/verify-email" element={<Navigate to="/reset-password" replace />} />
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-          </Suspense>
+                {/* Authenticated Learning Routes */}
+                <Route
+                  path="/home"
+                  element={
+                    <ProtectedRoute>
+                      <HomeDashboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/profiles"
+                  element={
+                    <ProtectedRoute>
+                      <ProfilePickerPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/placement-quiz"
+                  element={
+                    <ProtectedRoute>
+                      <PlacementQuizPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/trail"
+                  element={
+                    <ProtectedRoute>
+                      <TrailMapPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/game"
+                  element={
+                    <ProtectedRoute>
+                      <GameLoopPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/round-result"
+                  element={
+                    <ProtectedRoute>
+                      <RoundResultPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/daily-challenge"
+                  element={
+                    <ProtectedRoute>
+                      <DailyChallengePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/leaderboard"
+                  element={
+                    <ProtectedRoute>
+                      <LeaderboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/badges"
+                  element={
+                    <ProtectedRoute>
+                      <BadgesPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/supervisor"
+                  element={
+                    <ProtectedRoute requireSupervisor>
+                      <SupervisorDashboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/settings"
+                  element={
+                    <ProtectedRoute>
+                      <SettingsPage />
+                    </ProtectedRoute>
+                  }
+                />
+
+                {/* Legacy redirects: kept so old bookmarks/printed handouts
+                    pointing at the former section names still land on the
+                    supervisor portal instead of the 404 catch-all. */}
+                <Route path="/learning-hub" element={<Navigate to="/supervisor" replace />} />
+                <Route path="/teacher-hub" element={<Navigate to="/supervisor" replace />} />
+                <Route path="/challenges" element={<Navigate to="/supervisor" replace />} />
+
+                {/* Admin Routes (nested under AdminLayout's <Outlet />) */}
+                <Route
+                  path="/admin"
+                  element={
+                    <ProtectedRoute roles={['admin']}>
+                      <AdminLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route index element={<AdminOverviewPage />} />
+                  <Route path="accounts" element={<AdminAccountsPage />} />
+                  <Route path="classes" element={<AdminClassesPage />} />
+                  <Route path="words" element={<WordBankAdminPage />} />
+                  <Route path="leaderboard" element={<LeaderboardAdminPage />} />
+                </Route>
+
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
         </BrowserRouter>
       </SettingsProvider>
     </AuthProvider>

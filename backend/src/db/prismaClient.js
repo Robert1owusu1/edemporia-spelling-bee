@@ -5,9 +5,7 @@ const { PrismaPg } = require("@prisma/adapter-pg");
 // nodemon reloads the server during development.
 // Keep TLS verification on unless a local/self-signed database explicitly
 // opts out. Never set this flag to false for a production database.
-const ssl = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "false"
-  ? { rejectUnauthorized: false }
-  : undefined;
+const ssl = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "false" ? { rejectUnauthorized: false } : undefined;
 
 // Explicit pool sizing + timeouts. Without connectionTimeoutMillis a hung DNS
 // lookup (EAI_AGAIN, an unreachable pooler host, etc.) can block a request for

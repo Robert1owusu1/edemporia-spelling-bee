@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import BeeMascot from './BeeMascot';
 import TopStatBar from './common/TopStatBar';
@@ -9,7 +9,6 @@ import {
   Calendar,
   Trophy,
   Award,
-  User,
   Settings,
   LogOut,
   Users,
@@ -18,12 +17,51 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 
+// NavLink class strings, kept as shared helpers: the desktop bar, the
+// highlighted supervisor/admin links and the mobile bar each repeat the same
+// active/inactive pair, and a colour change must not drift between them.
+const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+    isActive
+      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
+      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
+  }`;
+
+const navLinkHighlightClass = ({ isActive }: { isActive: boolean }) =>
+  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+    isActive
+      ? 'bg-amber-500 text-slate-950'
+      : 'text-amber-400 bg-amber-950/40 border border-amber-800/60 hover:bg-amber-900/60'
+  }`;
+
+const mobileNavLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `flex flex-col items-center gap-1 text-[10px] font-bold shrink-0 ${isActive ? 'text-amber-400' : 'text-slate-400'}`;
+
 export default function Navbar() {
   const { activeStudent, students, selectStudent, logout, isAuthenticated, account, updateProfile } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profileError, setProfileError] = useState('');
   const profileImageInput = useRef<HTMLInputElement>(null);
+  // Container of the toggle + dropdown, used to tell an outside click apart
+  // from a click on the menu itself.
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the account menu when the user clicks anywhere else or navigates to
+  // another route; otherwise the dropdown stays floating over the new page.
+  useEffect(() => {
+    if (!showProfileMenu) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) setShowProfileMenu(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [showProfileMenu]);
+
+  useEffect(() => {
+    setShowProfileMenu(false);
+  }, [location.pathname]);
 
   const isSupervisor = account?.role === 'teacher' || account?.role === 'parent';
   const isAdmin = account?.role === 'admin';
@@ -32,8 +70,14 @@ export default function Navbar() {
 
   const changeProfilePicture = (file?: File) => {
     if (!file) return;
-    if (!file.type.startsWith('image/') || file.size > 1_000_000) {
-      setProfileError('Choose an image smaller than 1 MB.');
+    // Reject the two failure modes separately so the message tells the user
+    // which rule they actually broke.
+    if (!file.type.startsWith('image/')) {
+      setProfileError('Choose a PNG, JPEG, or WebP image file.');
+      return;
+    }
+    if (file.size > 1_500_000) {
+      setProfileError('Choose an image smaller than 1.5 MB.');
       return;
     }
     const reader = new FileReader();
@@ -42,6 +86,7 @@ export default function Navbar() {
         .then(() => setProfileError(''))
         .catch((error: Error) => setProfileError(error.message));
     };
+    reader.onerror = () => setProfileError('Could not read that image file. Please try another one.');
     reader.readAsDataURL(file);
   };
 
@@ -50,110 +95,51 @@ export default function Navbar() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2 sm:py-0 sm:min-h-16">
           {/* Brand Logo */}
-          <NavLink
-            to={isAuthenticated ? '/home' : '/'}
-            className="flex items-center gap-2.5 group"
-          >
+          <NavLink to={isAuthenticated ? '/home' : '/'} className="flex items-center gap-2.5 group">
             <BeeMascot size="sm" />
-<div>
-                <span className="font-bold text-base tracking-tight text-white group-hover:text-amber-400 transition-colors">
-                  Spelling Bee
-                </span>
-                <p className="text-[10px] text-slate-400 hidden sm:block font-normal">
-                  Gamified Spoken Learning Trail
-                </p>
-              </div>
+            <div>
+              <span className="font-bold text-base tracking-tight text-white group-hover:text-amber-400 transition-colors">
+                Spelling Bee
+              </span>
+              <p className="text-[10px] text-slate-400 hidden sm:block font-normal">Gamified Spoken Learning Trail</p>
+            </div>
           </NavLink>
 
           {/* Desktop Links */}
           {isAuthenticated && (
-            <nav className="hidden lg:flex items-center gap-1">
-              <NavLink
-                to="/home"
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
-                  }`
-                }
-              >
+            <nav aria-label="Main navigation" className="hidden lg:flex items-center gap-1">
+              <NavLink to="/home" className={navLinkClass}>
                 <Home className="w-3.5 h-3.5" />
                 <span>Home</span>
               </NavLink>
 
-              <NavLink
-                to="/trail"
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
-                  }`
-                }
-              >
+              <NavLink to="/trail" className={navLinkClass}>
                 <Map className="w-3.5 h-3.5" />
                 <span>Trail Map</span>
               </NavLink>
 
-              <NavLink
-                to="/daily-challenge"
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
-                  }`
-                }
-              >
+              <NavLink to="/daily-challenge" className={navLinkClass}>
                 <Calendar className="w-3.5 h-3.5 text-amber-400" />
                 <span>Daily</span>
               </NavLink>
 
-              <NavLink
-                to="/leaderboard"
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
-                  }`
-                }
-              >
+              <NavLink to="/leaderboard" className={navLinkClass}>
                 <Trophy className="w-3.5 h-3.5" />
                 <span>Leaderboard</span>
               </NavLink>
 
-              <NavLink
-                to="/badges"
-                className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    isActive
-                      ? 'bg-slate-800 text-amber-400 border border-slate-700/80'
-                      : 'text-slate-300 hover:text-white hover:bg-slate-800/50'
-                  }`
-                }
-              >
+              <NavLink to="/badges" className={navLinkClass}>
                 <Award className="w-3.5 h-3.5" />
                 <span>Badges</span>
               </NavLink>
               {isSupervisor && (
-                <NavLink
-                  to="/supervisor"
-                  className={({ isActive }) =>
-                    `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
-                      isActive
-                        ? 'bg-amber-500 text-slate-950'
-                        : 'text-amber-400 bg-amber-950/40 border border-amber-800/60 hover:bg-amber-900/60'
-                    }`
-                  }
-                >
+                <NavLink to="/supervisor" className={navLinkHighlightClass}>
                   <School className="w-3.5 h-3.5" />
                   <span>Supervisor Portal</span>
                 </NavLink>
               )}
               {isAdmin && (
-                <NavLink to="/admin" className={({ isActive }) => `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${isActive ? 'bg-amber-500 text-slate-950' : 'text-amber-400 bg-amber-950/40 border border-amber-800/60 hover:bg-amber-900/60'}`}>
+                <NavLink to="/admin" className={navLinkHighlightClass}>
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>Admin</span>
                 </NavLink>
@@ -165,22 +151,30 @@ export default function Navbar() {
           <div className="flex items-center gap-2 sm:gap-3">
             {isAuthenticated && activeStudent && (
               <TopStatBar
-                hearts={activeStudent.hearts ?? 3}
-                streak={activeStudent.streak ?? 0}
+                hearts={activeStudent.hearts ?? 5}
+                streakDays={activeStudent.dailyStreak ?? 0}
                 points={activeStudent.points ?? 0}
                 tier={activeStudent.currentTier ?? 1}
               />
             )}
 
             {isAuthenticated ? (
-              <div className="relative">
+              <div className="relative" ref={profileMenuRef}>
                 <button
                   type="button"
                   onClick={() => setShowProfileMenu((prev) => !prev)}
+                  aria-haspopup="true"
+                  aria-expanded={showProfileMenu}
+                  aria-controls="profile-menu"
+                  aria-label={`Account menu for ${displayName}`}
                   className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                 >
                   <div className="w-7 h-7 overflow-hidden rounded-full bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center uppercase">
-                    {displayAvatar ? <img src={displayAvatar} alt="Profile" className="h-full w-full object-cover" /> : displayName.charAt(0)}
+                    {displayAvatar ? (
+                      <img src={displayAvatar} alt="Profile" className="h-full w-full object-cover" />
+                    ) : (
+                      displayName.charAt(0)
+                    )}
                   </div>
                   <span className="hidden sm:inline text-xs font-semibold text-white max-w-[90px] truncate">
                     {displayName}
@@ -190,16 +184,43 @@ export default function Navbar() {
 
                 {/* Dropdown Menu */}
                 {showProfileMenu && (
-                  <div className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-lg py-2 z-50 divide-y divide-slate-800">
+                  <div
+                    id="profile-menu"
+                    className="absolute right-0 mt-2 w-56 bg-slate-900 border border-slate-800 rounded-xl shadow-lg py-2 z-50 divide-y divide-slate-800"
+                  >
                     <div className="px-3 py-2">
                       <div className="mb-3 flex items-center gap-2 rounded-lg bg-slate-800 p-2">
                         <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-amber-500 text-sm font-bold text-slate-950 flex items-center justify-center">
-                          {displayAvatar ? <img src={displayAvatar} alt="Profile" className="h-full w-full object-cover" /> : displayName.charAt(0)}
+                          {displayAvatar ? (
+                            <img src={displayAvatar} alt="Profile" className="h-full w-full object-cover" />
+                          ) : (
+                            displayName.charAt(0)
+                          )}
                         </div>
-                        <div className="min-w-0"><p className="truncate text-xs font-bold text-white">{displayName}</p><button type="button" onClick={() => profileImageInput.current?.click()} className="mt-0.5 text-[10px] font-semibold text-amber-400 hover:underline">Change profile picture</button></div>
-                        <input ref={profileImageInput} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => changeProfilePicture(event.target.files?.[0])} />
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold text-white">{displayName}</p>
+                          <button
+                            type="button"
+                            onClick={() => profileImageInput.current?.click()}
+                            className="mt-0.5 text-[10px] font-semibold text-amber-400 hover:underline"
+                          >
+                            Change profile picture
+                          </button>
+                        </div>
+                        <input
+                          ref={profileImageInput}
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          aria-label="Choose a new profile picture"
+                          className="hidden"
+                          onChange={(event) => changeProfilePicture(event.target.files?.[0])}
+                        />
                       </div>
-                      {profileError ? <p className="mb-2 text-[10px] text-rose-300">{profileError}</p> : null}
+                      {profileError ? (
+                        <p role="alert" className="mb-2 text-[10px] text-rose-300">
+                          {profileError}
+                        </p>
+                      ) : null}
                       <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                         Switch Learner Profile
                       </p>
@@ -219,9 +240,7 @@ export default function Navbar() {
                             }`}
                           >
                             <span className="truncate">{st.name}</span>
-                            <span className="text-[10px] opacity-80">
-                              Tier {st.currentTier || 1}
-                            </span>
+                            <span className="text-[10px] opacity-80">Tier {st.currentTier || 1}</span>
                           </button>
                         ))}
                       </div>
@@ -296,51 +315,26 @@ export default function Navbar() {
 
       {/* Mobile Bottom Navigation */}
       {isAuthenticated && (
-        <nav className="lg:hidden flex items-center justify-around overflow-x-auto border-t border-slate-800 bg-slate-900 pt-2 pb-safe">
-          <NavLink
-            to="/home"
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 text-[10px] font-bold shrink-0 ${
-                isActive ? 'text-amber-400' : 'text-slate-400'
-              }`
-            }
-          >
+        <nav
+          aria-label="Main navigation (compact)"
+          className="lg:hidden flex items-center justify-around overflow-x-auto border-t border-slate-800 bg-slate-900 pt-2 pb-safe"
+        >
+          <NavLink to="/home" className={mobileNavLinkClass}>
             <Home className="w-4 h-4" />
             <span>Home</span>
           </NavLink>
 
-          <NavLink
-            to="/trail"
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 text-[10px] font-bold shrink-0 ${
-                isActive ? 'text-amber-400' : 'text-slate-400'
-              }`
-            }
-          >
+          <NavLink to="/trail" className={mobileNavLinkClass}>
             <Map className="w-4 h-4" />
             <span>Trail</span>
           </NavLink>
 
-          <NavLink
-            to="/daily-challenge"
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 text-[10px] font-bold shrink-0 ${
-                isActive ? 'text-amber-400' : 'text-slate-400'
-              }`
-            }
-          >
+          <NavLink to="/daily-challenge" className={mobileNavLinkClass}>
             <Calendar className="w-4 h-4 text-amber-400" />
             <span>Daily</span>
           </NavLink>
 
-          <NavLink
-            to="/leaderboard"
-            className={({ isActive }) =>
-              `flex flex-col items-center gap-1 text-[10px] font-bold shrink-0 ${
-                isActive ? 'text-amber-400' : 'text-slate-400'
-              }`
-            }
-          >
+          <NavLink to="/leaderboard" className={mobileNavLinkClass}>
             <Trophy className="w-4 h-4" />
             <span>Ranks</span>
           </NavLink>

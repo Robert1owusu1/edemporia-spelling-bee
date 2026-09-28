@@ -22,22 +22,26 @@ let redisAvailable = false;
 let redis;
 if (REDIS_URL) {
   try {
-    // eslint-disable-next-line global-require
     const redisModule = require("redis");
     if (redisModule && typeof redisModule.createClient === "function") {
       redis = redisModule.createClient({ url: REDIS_URL });
       redis.on("error", (err) => console.error("[rate-limit] Redis error:", err.message));
-      redis.connect().catch(() => { redisAvailable = false; });
+      redis.connect().catch(() => {
+        redisAvailable = false;
+      });
       redisAvailable = true;
     }
   } catch {
-    console.warn("[rate-limit] REDIS_URL is set but the 'redis' package is not installed. Falling back to in-memory (per-process) rate limiting.");
+    console.warn(
+      "[rate-limit] REDIS_URL is set but the 'redis' package is not installed. Falling back to in-memory (per-process) rate limiting.",
+    );
   }
 }
 
 // Every limiter instance namespaces its own budget (window + max) so separate
 // limiters on the same key (e.g. rounds vs hints for one account) no longer
-// share one bucket. Returns true when the request exceeds the budget.
+// share one bucket. Returns { exceeded, retryAfterSec } so 429 responses can
+// carry a truthful Retry-After header.
 async function checkBudget(key, windowMs, max) {
   const now = Date.now();
   if (redisAvailable) {
@@ -52,10 +56,10 @@ async function checkBudget(key, windowMs, max) {
         .expire(redisKey, Math.ceil(windowMs / 1000) + 60)
         .exec();
       const count = Number(results && results[2]) || 0;
-      return count > max;
+      return { exceeded: count > max, retryAfterSec: Math.ceil(windowMs / 1000) };
     } catch {
       // A Redis hiccup must never lock everyone out -- fail open.
-      return false;
+      return { exceeded: false, retryAfterSec: 0 };
     }
   }
 
@@ -63,17 +67,25 @@ async function checkBudget(key, windowMs, max) {
   const record = buckets.get(memoryKey);
   if (!record || record.resetAt <= now) {
     buckets.set(memoryKey, { count: 1, resetAt: now + windowMs });
-    return false;
+    return { exceeded: false, retryAfterSec: 0 };
   }
   record.count += 1;
-  return record.count > max;
+  return {
+    exceeded: record.count > max,
+    retryAfterSec: Math.max(1, Math.ceil((record.resetAt - now) / 1000)),
+  };
 }
 
 function rateLimit({ windowMs = 15 * 60 * 1000, max = 100, key = (req) => req.ip } = {}) {
   return async (req, res, next) => {
     const bucketKey = key(req);
-    const exceeded = await checkBudget(bucketKey, windowMs, max);
-    if (exceeded) return res.status(429).json({ error: "Too many requests. Please try again shortly." });
+    const { exceeded, retryAfterSec } = await checkBudget(bucketKey, windowMs, max);
+    if (exceeded) {
+      // Retry-After tells the client exactly when the budget resets instead
+      // of leaving it to guess (and hammer the endpoint in the meantime).
+      if (retryAfterSec > 0) res.setHeader("Retry-After", String(retryAfterSec));
+      return res.status(429).json({ error: "Too many requests. Please try again shortly." });
+    }
     next();
   };
 }

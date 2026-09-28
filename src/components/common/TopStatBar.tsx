@@ -1,18 +1,12 @@
-import React from 'react';
-
 interface TopStatBarProps {
   hearts: number;
-  streak: number;
+  /** Consecutive practice days (`Student.dailyStreak`), not the round combo. */
+  streakDays: number;
   points: number;
   tier?: number;
 }
 
-export default function TopStatBar({
-  hearts,
-  streak,
-  points,
-  tier,
-}: TopStatBarProps) {
+export default function TopStatBar({ hearts, streakDays, points, tier }: TopStatBarProps) {
   return (
     <div className="flex items-center gap-2 sm:gap-2.5 bg-slate-800/90 border border-slate-700/80 px-3 py-1 rounded-xl">
       {/* Hearts */}
@@ -30,7 +24,7 @@ export default function TopStatBar({
         title="Spelling Streak Days"
       >
         <span className="text-xs">🔥</span>
-        <span>{streak}d</span>
+        <span>{streakDays}d</span>
       </div>
 
       {/* Points */}

@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import BeeMascot from '../components/game/BeeMascot';
+import BeeMascot from '../components/BeeMascot';
 import Navbar from '../components/Navbar';
-import { Volume2, Mic, Trophy, ArrowRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { Volume2, Mic, Trophy, ArrowRight, ArrowLeft } from 'lucide-react';
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
@@ -28,14 +28,31 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-[#0A1128] dark:bg-navy-900 dark:text-slate-100">
       <Navbar />
 
-      <main className="flex-1 max-w-xl w-full mx-auto px-4 py-12 flex flex-col justify-center items-center">
+      <main
+        id="main-content"
+        className="flex-1 max-w-xl w-full mx-auto px-4 py-12 flex flex-col justify-center items-center"
+      >
+        {/* Single h1 for the page (screen-reader only): the step headings
+            below are the visible titles and stay at h2. */}
+        <h1 className="sr-only">Getting started with Spelling Bee</h1>
         <div className="w-full bg-white border-2 border-[#1C2E5A] rounded-3xl p-6 sm:p-8 shadow-xl space-y-8 text-center dark:bg-navy-800 dark:border-navy-600">
           {/* Step Progress Bar */}
           <div className="flex items-center justify-between gap-2 border-b border-[#E2E8F0] pb-4 dark:border-navy-700">
-            <span className="text-xs font-mono font-bold text-[#D97706] uppercase tracking-wider">
+            {/* role="status" so advancing or going back announces the new
+                step; the dots below carry the same value for AT that expose
+                progressbars. */}
+            <span role="status" className="text-xs font-mono font-bold text-[#D97706] uppercase tracking-wider">
               Step {step} of {totalSteps}
             </span>
-            <div className="flex gap-1.5">
+            <div
+              className="flex gap-1.5"
+              role="progressbar"
+              aria-label="Onboarding progress"
+              aria-valuemin={1}
+              aria-valuemax={totalSteps}
+              aria-valuenow={step}
+              aria-valuetext={`Step ${step} of ${totalSteps}`}
+            >
               {[1, 2, 3].map((s) => (
                 <div
                   key={s}
@@ -43,8 +60,8 @@ export default function OnboardingPage() {
                     s === step
                       ? 'w-8 bg-[#F59E0B]'
                       : s < step
-                      ? 'w-4 bg-[#1C2E5A] dark:bg-navy-600'
-                      : 'w-4 bg-[#E2E8F0] dark:bg-navy-700'
+                        ? 'w-4 bg-[#1C2E5A] dark:bg-navy-600'
+                        : 'w-4 bg-[#E2E8F0] dark:bg-navy-700'
                   }`}
                 />
               ))}
@@ -60,7 +77,8 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 <h2 className="text-2xl font-black text-[#0A1128] dark:text-slate-100">1. Hear Every Word</h2>
                 <p className="text-sm text-[#64748B] leading-relaxed dark:text-slate-400">
-                  Press the speaker button to hear high-quality audio pronunciation. You can also view definitions and example sentences if you need a hint!
+                  Press the speaker button to hear high-quality audio pronunciation. You can also view definitions and
+                  example sentences if you need a hint!
                 </p>
               </div>
             </div>
@@ -75,7 +93,8 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 <h2 className="text-2xl font-black text-[#0A1128] dark:text-slate-100">2. Speak Your Spelling</h2>
                 <p className="text-sm text-[#64748B] leading-relaxed dark:text-slate-400">
-                  Spell the word aloud letter by letter into your microphone ("k... e... n... t... e"). Voice is the way to spell — just press the microphone and speak.
+                  Spell the word aloud letter by letter into your microphone ("k... e... n... t... e"). Voice is the way
+                  to spell — just press the microphone and speak.
                 </p>
               </div>
             </div>
@@ -90,7 +109,8 @@ export default function OnboardingPage() {
               <div className="space-y-2">
                 <h2 className="text-2xl font-black text-[#0A1128] dark:text-slate-100">3. Earn Badges & Tiers</h2>
                 <p className="text-sm text-[#64748B] leading-relaxed dark:text-slate-400">
-                  Build streak flames, protect your hearts, earn points, unlock new difficulty tiers on the trail map, and climb the student leaderboard.
+                  Build streak flames, protect your hearts, earn points, unlock new difficulty tiers on the trail map,
+                  and climb the student leaderboard.
                 </p>
               </div>
             </div>
@@ -98,7 +118,7 @@ export default function OnboardingPage() {
 
           {/* Mascot cheer */}
           <div className="pt-2 flex items-center justify-center">
-            <BeeMascot size="md" />
+            <BeeMascot variant="emoji" size="md" />
           </div>
 
           {/* Navigation Controls */}

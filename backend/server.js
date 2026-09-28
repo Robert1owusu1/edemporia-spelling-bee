@@ -11,7 +11,15 @@ const { bootstrapPlatformAdmin } = require("./src/services/platformAdminBootstra
 // Guard against a weak or default JWT secret: anyone who knows it can forge a
 // session for any account (including ADMIN). Known-in-the-repo values and
 // short/obvious secrets abort startup so the mistake is caught immediately.
-const WEAK_JWT_SECRETS = new Set(["roberto100$@gh.", "roberto100$@gh.com@%#Amanpeh.Joofella", "change-me", "secret", "jwt-secret", "your-secret-key", "changeme"]);
+const WEAK_JWT_SECRETS = new Set([
+  "roberto100$@gh.",
+  "roberto100$@gh.com@%#Amanpeh.Joofella",
+  "change-me",
+  "secret",
+  "jwt-secret",
+  "your-secret-key",
+  "changeme",
+]);
 function validateJwtSecret(secret) {
   if (!secret) return "JWT_SECRET is not set.";
   if (WEAK_JWT_SECRETS.has(secret)) return "JWT_SECRET is a known weak/default value.";
@@ -26,14 +34,20 @@ function validateJwtSecret(secret) {
 const jwtSecretError = validateJwtSecret(process.env.JWT_SECRET);
 if (jwtSecretError) {
   console.error(`[SECURITY] Cannot start: ${jwtSecretError}`);
-  console.error("Generate a strong secret, e.g.: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"");
+  console.error(
+    "Generate a strong secret, e.g.: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"",
+  );
   console.error("Then set it in backend/.env (JWT_SECRET=...) and restart.");
   process.exit(1);
 }
 
 const app = express();
-const configuredOrigins = (process.env.FRONTEND_URL || "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
-  .split(",").map((origin) => origin.trim()).filter(Boolean);
+const configuredOrigins = (
+  process.env.FRONTEND_URL || "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Development only: accept localhost and private/LAN addresses on any port so
 // the phone can reach a dev machine (e.g. http://10.244.162.171:3000), plus
@@ -43,7 +57,11 @@ const configuredOrigins = (process.env.FRONTEND_URL || "http://localhost:3000,ht
 function isAllowedDevOrigin(origin) {
   if (process.env.NODE_ENV === "production") return false;
   let host;
-  try { host = new URL(origin).hostname; } catch { return false; }
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
   if (host === "localhost" || host === "127.0.0.1") return true;
   if (host.endsWith(".local")) return true;
   if (host.endsWith(".devtunnels.ms")) return true;
@@ -60,7 +78,9 @@ function isAllowedDevOrigin(origin) {
 if (process.env.TRUST_PROXY) {
   const hops = Number(process.env.TRUST_PROXY);
   if (!Number.isInteger(hops) || hops < 1) {
-    console.error(`[SECURITY] Cannot start: TRUST_PROXY must be a positive integer (got "${process.env.TRUST_PROXY}"). Set it to the number of proxy hops in front of this server (e.g. 1), or remove the variable when running directly exposed.`);
+    console.error(
+      `[SECURITY] Cannot start: TRUST_PROXY must be a positive integer (got "${process.env.TRUST_PROXY}"). Set it to the number of proxy hops in front of this server (e.g. 1), or remove the variable when running directly exposed.`,
+    );
     process.exit(1);
   }
   app.set("trust proxy", hops);
@@ -73,7 +93,8 @@ app.use((req, res, next) => {
   cors({
     origin(origin, callback) {
       // Non-browser clients do not send an Origin header.
-      if (!origin || origin === requestOrigin || configuredOrigins.includes(origin) || isAllowedDevOrigin(origin)) return callback(null, true);
+      if (!origin || origin === requestOrigin || configuredOrigins.includes(origin) || isAllowedDevOrigin(origin))
+        return callback(null, true);
       return callback(new Error("Origin is not allowed by CORS"));
     },
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
@@ -92,7 +113,10 @@ app.use((req, res, next) => {
   // exception. The Google Fonts stylesheet/font files are a fixed, well-known
   // CDN (loaded by src/index.css) and are allow-listed explicitly. 'self'
   // covers the API because the SPA is served by this same host in production.
-  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; frame-src 'self' blob:; base-uri 'self'");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; frame-src 'self' blob:; base-uri 'self'",
+  );
   next();
 });
 
@@ -106,13 +130,25 @@ if (process.env.NODE_ENV !== "test") {
   app.use((req, res, next) => {
     const startedAt = Date.now();
     res.on("finish", () => {
-      console.log(`${new Date().toISOString()} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - startedAt}ms`);
+      console.log(
+        `${new Date().toISOString()} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - startedAt}ms`,
+      );
     });
     next();
   });
 }
 
 app.use(express.json({ limit: "2mb" }));
+
+// The JSON API is per-session and must always be read fresh: without an
+// explicit no-store, a response with an ETag and no freshness information can
+// be replayed from the browser cache and hand the client stale state (it did:
+// a cached /admin/accounts body resurrected an already-cleared password-reset
+// badge). Static assets below set their own Cache-Control and overwrite this.
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 
 // Health check -- doesn't touch the DB, so it works even before
 // PostgreSQL/Prisma are fully set up. Good first thing to hit.
@@ -142,7 +178,26 @@ if (fs.existsSync(distPath)) {
 function isDatabaseConnectionError(err) {
   if (!err) return false;
   const code = String(err.code || "");
-  if (["P1001", "P1002", "P1017", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "EPIPE", "57P01", "57P02", "53300", "08006", "08001", "08004"].includes(code)) return true;
+  if (
+    [
+      "P1001",
+      "P1002",
+      "P1017",
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "ETIMEDOUT",
+      "ECONNRESET",
+      "EPIPE",
+      "57P01",
+      "57P02",
+      "53300",
+      "08006",
+      "08001",
+      "08004",
+    ].includes(code)
+  )
+    return true;
   // pg-pool uses a few distinct wordings depending on whether the pool wait or
   // the connection itself timed out; the socket-level detail may sit on the
   // cause chain instead of the top error, so flatten it.
@@ -162,7 +217,9 @@ function isDatabaseConnectionError(err) {
   ].some((needle) => combined.toLowerCase().includes(needle));
 }
 
-app.use((err, req, res, next) => {
+// Express identifies error middleware by arity, so `next` must stay even
+// though this handler never delegates onward.
+app.use((err, req, res, _next) => {
   console.error(err);
   if (err.message === "Origin is not allowed by CORS") {
     return res.status(403).json({ error: "Origin is not allowed by CORS" });
@@ -186,18 +243,52 @@ const PORT = Number(process.env.PORT) || 4000;
 // background so a transient DNS or network blip at startup cannot crash the
 // whole API (e.g. EAI_AGAIN while resolving the database hostname).
 const server = app.listen(PORT, () => console.log(`Spelling bee backend listening on port ${PORT}`));
-server.on("error", (error) => { console.error(`Unable to start the backend on port ${PORT}:`, error.message); process.exit(1); });
+server.on("error", (error) => {
+  console.error(`Unable to start the backend on port ${PORT}:`, error.message);
+  process.exit(1);
+});
 
-const shutdown = (signal) => {
+// Track open sockets so shutdown can close idle keep-alive connections;
+// otherwise server.close() waits forever for a pooled connection nobody is
+// actively using and the process only exits via the hard timer below.
+const openSockets = new Set();
+server.on("connection", (socket) => {
+  openSockets.add(socket);
+  socket.on("close", () => openSockets.delete(socket));
+});
+
+const shutdown = (signal, exitCode = 0) => {
   console.log(`Received ${signal}, shutting down gracefully...`);
   server.close(async () => {
     await prisma.$disconnect();
-    process.exit(0);
+    process.exit(exitCode);
   });
-  setTimeout(() => process.exit(1), 10_000).unref();
+  // Give in-flight requests a moment to finish, then close lingering
+  // keep-alive sockets so server.close() can complete.
+  setTimeout(() => {
+    for (const socket of openSockets) socket.destroy();
+  }, 3_000).unref();
+  setTimeout(() => process.exit(exitCode === 0 ? 1 : exitCode), 10_000).unref();
 };
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+
+// An unhandled rejection/exception means the process state is no longer
+// trustworthy: log it loudly (with a stack) and exit non-zero after a
+// graceful shutdown instead of limping on with unknown corruption. Express
+// request errors are already handled by the error middleware above -- these
+// handlers catch what slips outside it (background timers, stray promises).
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "[FATAL] Unhandled promise rejection:",
+    reason instanceof Error ? reason.stack || reason.message : reason,
+  );
+  shutdown("unhandledRejection", 1);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[FATAL] Uncaught exception:", error.stack || error.message);
+  shutdown("uncaughtException", 1);
+});
 
 let bootstrapAttempts = 0;
 async function runAdminBootstrap() {

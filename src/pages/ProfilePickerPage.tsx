@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import BeeMascot from '../components/game/BeeMascot';
+import BeeMascot from '../components/BeeMascot';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
 import CreateStudentForm from '../components/dashboard/CreateStudentForm';
 import { ProfileListSkeleton } from '../components/common/Skeletons';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { Plus } from 'lucide-react';
 import { Student } from '../api/types';
 
@@ -14,6 +15,9 @@ export default function ProfilePickerPage() {
   const { account, students, selectStudent, isLoading } = useAuth();
   const [showCreateForm, setShowCreateForm] = useState(false);
   const isStudentSession = account?.role === 'student';
+  // Create-profile modal: focus moves in, Tab is trapped, Escape cancels,
+  // and focus returns to the "Add New Learner" card on close.
+  const createFormDialogRef = useDialogFocus({ open: showCreateForm, onClose: () => setShowCreateForm(false) });
 
   const handleSelectStudent = (student: Student) => {
     selectStudent(student);
@@ -34,11 +38,16 @@ export default function ProfilePickerPage() {
     <div className="min-h-screen bg-slate-50/70 flex flex-col font-sans text-slate-900 antialiased dark:bg-navy-900 dark:text-slate-100">
       <Navbar />
 
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-12 flex flex-col justify-center items-center">
+      <main
+        id="main-content"
+        className="flex-1 max-w-4xl w-full mx-auto px-4 py-12 flex flex-col justify-center items-center"
+      >
         <div className="text-center space-y-2 mb-8">
-          <BeeMascot size="lg" className="mx-auto" />
+          <BeeMascot variant="emoji" size="lg" className="mx-auto" />
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Who is spelling today?</h1>
-          <p className="text-xs text-slate-500 font-normal dark:text-slate-400">Select a learner profile or create a new one</p>
+          <p className="text-xs text-slate-500 font-normal dark:text-slate-400">
+            Select a learner profile or create a new one
+          </p>
         </div>
 
         {/* Loading Skeleton vs Profiles Grid */}
@@ -47,8 +56,9 @@ export default function ProfilePickerPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-3xl mb-8">
             {students.map((st) => (
-              <div
+              <button
                 key={st.id}
+                type="button"
                 onClick={() => handleSelectStudent(st)}
                 className="bg-white border border-slate-200/80 hover:border-amber-400 p-6 rounded-2xl shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col items-center text-center space-y-3 group dark:bg-navy-800 dark:border-navy-700"
               >
@@ -60,9 +70,9 @@ export default function ProfilePickerPage() {
                 </div>
 
                 <div>
-                  <h3 className="font-bold text-base text-slate-900 group-hover:text-amber-600 transition-colors dark:text-slate-100">
+                  <h2 className="font-bold text-base text-slate-900 group-hover:text-amber-600 transition-colors dark:text-slate-100">
                     {st.name}
-                  </h3>
+                  </h2>
                   <p className="text-xs text-slate-500 font-normal mt-0.5 dark:text-slate-400">
                     {st.className || 'Student'} • Age {st.age || 8}
                   </p>
@@ -73,7 +83,7 @@ export default function ProfilePickerPage() {
                   <span>•</span>
                   <span>⭐ {st.points || 0} pts</span>
                 </div>
-              </div>
+              </button>
             ))}
 
             {/* Add Profile Card */}
@@ -106,10 +116,23 @@ export default function ProfilePickerPage() {
         {/* Create Profile Modal */}
         {showCreateForm && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in dark:bg-black/80">
-            <CreateStudentForm
-              onSuccess={handleCreatedSuccess}
-              onCancel={() => setShowCreateForm(false)}
+            {/* Invisible backdrop button: clicking outside cancels for pointer
+                users; keyboard users get Escape and the Cancel button. */}
+            <button
+              type="button"
+              aria-label="Cancel"
+              onClick={() => setShowCreateForm(false)}
+              className="absolute inset-0 cursor-default"
             />
+            <div
+              ref={createFormDialogRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-student-form-title"
+              className="flex w-full items-center justify-center"
+            >
+              <CreateStudentForm onSuccess={handleCreatedSuccess} onCancel={() => setShowCreateForm(false)} />
+            </div>
           </div>
         )}
       </main>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { apiClient } from '../api/client';
 import { Badge } from '../api/types';
@@ -90,7 +90,7 @@ export default function BadgesPage() {
     <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
       <Navbar />
 
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 space-y-6">
+      <main id="main-content" className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 space-y-6">
         <div className="bg-white dark:bg-navy-800 border border-slate-200/80 dark:border-navy-700 rounded-2xl p-6 shadow-xs text-center space-y-2">
           <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200/60 dark:border-indigo-500/30 px-3 py-1 rounded-md">
             <Award className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-300" />
@@ -98,7 +98,8 @@ export default function BadgesPage() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Spelling Badges & Medals</h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-            Earn custom honeycomb badges by completing word sets, maintaining streaks, and mastering the daily challenge.
+            Earn custom honeycomb badges by completing word sets, maintaining streaks, and mastering the daily
+            challenge.
           </p>
         </div>
 
@@ -128,7 +129,7 @@ export default function BadgesPage() {
                   </HexagonBadge>
 
                   <div className="space-y-1">
-                    <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">{b.name}</h3>
+                    <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100">{b.name}</h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400 font-normal leading-relaxed">
                       {b.description}
                     </p>
@@ -141,7 +142,7 @@ export default function BadgesPage() {
                         <span>Unlocked</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-navy-700 px-2.5 py-1 rounded-md border border-slate-200 dark:border-navy-700">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-400 bg-slate-100 dark:bg-navy-700 px-2.5 py-1 rounded-md border border-slate-200 dark:border-navy-700">
                         <Lock className="w-3.5 h-3.5" />
                         <span>Locked</span>
                       </span>

@@ -1,14 +1,10 @@
 const prisma = require("../db/prismaClient");
 
-// The organisation scope for a leaderboard request: students whose account or
-// classroom belongs to the caller's organisation. Admins see the whole
-// platform. A school must never see another school's learners' names and
-// points on the same board, and an org-less caller must never match every
-// org-less student platform-wide -- a parent sees their own learners, a
-// teacher their own classes, and an org-less learner their classmates/siblings.
-// The leaderboard scope for a request: administrators see the whole school,
-// a parent sees their own learners, a teacher their own classes, and a
-// learner (student session) their classmates/siblings.
+// The leaderboard scope for a request: administrators see every learner on
+// the platform, a parent sees their own learners, a teacher their own
+// classes, and a learner (student session) their classmates/siblings. A
+// school-wide board must never leak names/points from outside the caller's
+// scope, and an unscoped caller must never match every learner platform-wide.
 async function callerStudentScope(req) {
   if (req.user.role === "ADMIN") return null;
   if (req.user.studentId) {
@@ -27,23 +23,28 @@ async function callerStudentScope(req) {
 async function getLeaderboard(req, res) {
   const { className } = req.query;
 
-  const where = { ...(await callerStudentScope(req) || {}) };
+  const where = { ...((await callerStudentScope(req)) || {}) };
   if (className) where.className = className;
 
   const students = await prisma.student.findMany({
     where,
     orderBy: { points: "desc" },
     take: 50,
-    select: { id: true, name: true, currentTier: true, points: true, streak: true, className: true },
+    select: { id: true, name: true, currentTier: true, points: true, streak: true, dailyStreak: true, className: true },
   });
 
   // The frontend's LeaderboardEntry expects `studentId` (unique key) and `tier`,
-  // so map the row's id/currentTier to those field names.
-  return res.json(students.map(({ id, currentTier, ...rest }) => ({
-    ...rest,
-    studentId: id,
-    tier: currentTier,
-  })));
+  // so map the row's id/currentTier to those field names. `streak` is the round
+  // combo; `dailyStreak`/`streakDays` are the consecutive practice days.
+  return res.json(
+    students.map(({ id, currentTier, dailyStreak, ...rest }) => ({
+      ...rest,
+      dailyStreak,
+      streakDays: dailyStreak,
+      studentId: id,
+      tier: currentTier,
+    })),
+  );
 }
 
 module.exports = { getLeaderboard };

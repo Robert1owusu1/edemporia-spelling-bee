@@ -1,26 +1,18 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import BeeMascot from '../components/game/BeeMascot';
+import BeeMascot from '../components/BeeMascot';
 import HexagonBadge from '../components/common/HexagonBadge';
 import { audioFx } from '../utils/audioEffects';
-import { Map, Lock, Play, CheckCircle2, Sparkles, Star, Trophy, Flame } from 'lucide-react';
+import { formatHours } from '../utils/format';
+import { Lock, Play, CheckCircle2, Sparkles, Star } from 'lucide-react';
 
 export default function TrailMapPage() {
   const navigate = useNavigate();
   const { activeStudent } = useAuth();
 
   const currentTier = activeStudent?.currentTier || 1;
-
-  const formatHours = (seconds: number) => {
-    if (!seconds) return '0h';
-    const hours = seconds / 3600;
-    if (seconds < 60) return `${seconds}s`;
-    if (hours < 1) return `${Math.round(seconds / 60)} min`;
-    return `${hours.toFixed(1)} hrs`;
-  };
 
   const TIERS = [
     {
@@ -84,7 +76,7 @@ export default function TrailMapPage() {
     <div className="min-h-screen bg-slate-50/70 dark:bg-navy-900 flex flex-col font-sans text-slate-900 dark:text-slate-100 antialiased">
       <Navbar />
 
-      <main className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 space-y-8">
+      <main id="main-content" className="flex-1 max-w-4xl w-full mx-auto px-4 py-8 space-y-8">
         {/* Gamified Map Header */}
         <div className="bg-slate-900 dark:bg-navy-800 border border-slate-800 dark:border-navy-700 text-white rounded-2xl p-6 shadow-md flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
@@ -104,9 +96,11 @@ export default function TrailMapPage() {
             </div>
             <div className="bg-slate-800 border border-slate-700 px-3 py-2 rounded-xl text-center">
               <span className="text-[10px] text-slate-400 uppercase font-black tracking-wider block">Hours Spent</span>
-              <span className="text-amber-400 font-black text-lg">{formatHours(activeStudent?.totalSpentSeconds || 0)}</span>
+              <span className="text-amber-400 font-black text-lg">
+                {formatHours(activeStudent?.totalSpentSeconds || 0)}
+              </span>
             </div>
-            <BeeMascot size="md" expression="cheering" />
+            <BeeMascot variant="emoji" size="md" expression="cheering" />
           </div>
         </div>
 
@@ -129,8 +123,8 @@ export default function TrailMapPage() {
                   isCurrent
                     ? 'border-2 border-amber-500 ring-4 ring-amber-400/20 shadow-md'
                     : isUnlocked
-                    ? 'border-slate-200 dark:border-navy-700 hover:border-amber-300'
-                    : 'border-slate-200 dark:border-navy-700 opacity-60 bg-slate-50 dark:bg-navy-700'
+                      ? 'border-slate-200 dark:border-navy-700 hover:border-amber-300'
+                      : 'border-slate-200 dark:border-navy-700 opacity-60 bg-slate-50 dark:bg-navy-700'
                 }`}
               >
                 {/* Node Hexagon Badge */}
@@ -140,12 +134,7 @@ export default function TrailMapPage() {
                       🐝 Active Stage
                     </div>
                   )}
-                  <HexagonBadge
-                    active={isUnlocked}
-                    color={t.color}
-                    size="lg"
-                    className="shadow-xs"
-                  >
+                  <HexagonBadge active={isUnlocked} color={t.color} size="lg" className="shadow-xs">
                     {isCompleted ? (
                       <CheckCircle2 className="w-8 h-8 text-emerald-600" />
                     ) : isUnlocked ? (
@@ -160,7 +149,7 @@ export default function TrailMapPage() {
                 <div className="flex-1 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100">{t.title}</h3>
+                      <h2 className="text-base font-extrabold text-slate-900 dark:text-slate-100">{t.title}</h2>
                       {isCompleted && (
                         <span className="flex items-center text-amber-500 text-xs">
                           <Star className="w-3.5 h-3.5 fill-current" />
@@ -178,30 +167,30 @@ export default function TrailMapPage() {
                     {t.description}
                   </p>
 
-            <div className="pt-2">
-              {isUnlocked ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    audioFx.playClick();
-                    // The game engine supports tiers 1-6, so the Special Node's
-                    // bonus challenge is served from the hardest real tier.
-                    navigate(`/game?tier=${Math.min(t.tier, 6)}`);
-                  }}
-                  className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs uppercase tracking-wider py-3 min-tap px-4 rounded-xl transition-all cursor-pointer shadow-xs inline-flex items-center justify-center gap-2 active:scale-[0.98]"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Play {t.tier > 6 ? 'Special Challenge' : `Tier ${t.tier} Challenge`}</span>
-                </button>
-              ) : (
-                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Locked: Complete Tier {requiredTier} first</span>
-                </div>
-              )}
-            </div>
+                  <div className="pt-2">
+                    {isUnlocked ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          audioFx.playClick();
+                          // The game engine supports tiers 1-6, so the Special Node's
+                          // bonus challenge is served from the hardest real tier.
+                          navigate(`/game?tier=${Math.min(t.tier, 6)}`);
+                        }}
+                        className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs uppercase tracking-wider py-3 min-tap px-4 rounded-xl transition-all cursor-pointer shadow-xs inline-flex items-center justify-center gap-2 active:scale-[0.98]"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <span>Play {t.tier > 6 ? 'Special Challenge' : `Tier ${t.tier} Challenge`}</span>
+                      </button>
+                    ) : (
+                      <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 dark:text-slate-500">
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Locked: Complete Tier {requiredTier} first</span>
+                      </div>
+                    )}
                   </div>
                 </div>
+              </div>
             );
           })}
         </div>
@@ -211,4 +200,3 @@ export default function TrailMapPage() {
     </div>
   );
 }
-
